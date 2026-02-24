@@ -260,6 +260,42 @@ class ModelSwapManager:
             return
 
         if self._process.poll() is not None:
+            # Process already dead, clean up zombie
+            try:
+                os.waitpid(self._process.pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                pass
+            self._process = None
+            self._current_role = None
+            return
+
+        logger.info(f"Stopping llama-server PID={self._process.pid}")
+        self._process.terminate()
+
+        for _ in range(self.config.shutdown_timeout):
+            if self._process.poll() is not None:
+                break
+            await asyncio.sleep(1)
+        else:
+            logger.warning("Force killing llama-server")
+            self._process.kill()
+            self._process.wait()
+
+        # Clean up zombie process
+        try:
+            os.waitpid(self._process.pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
+
+        self._process = None
+        self._current_role = None
+
+        # Allow GPU memory to be released
+        await asyncio.sleep(2)
+        if self._process is None:
+            return
+
+        if self._process.poll() is not None:
             self._process = None
             self._current_role = None
             return
