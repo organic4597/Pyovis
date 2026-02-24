@@ -571,7 +571,13 @@ class SessionManager:
             default={"status": "success", "message": response},
         )
 
-        # Ensure no file_path is set for chat
+        # Ensure no file_path or workspace is set for chat
+        result.pop("file_path", None)
+        result.pop("workspace", None)  # Chat should not have workspace
+
+        result["task_id"] = task_id
+        result["path"] = "chat"
+        return result
         result.pop("file_path", None)
 
         result["task_id"] = task_id

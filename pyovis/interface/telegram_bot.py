@@ -368,6 +368,13 @@ class TelegramBot:
         if analysis.complexity == TaskComplexity.CHAT:
             # Chat - respond without file generation
             result = await analyzer.handle_simple_task(user_text)
+            # Remove any file_path or workspace that might have been set
+            result.pop("file_path", None)
+            result.pop("workspace", None)
+            await swap.shutdown()
+            return result
+            # Chat - respond without file generation
+            result = await analyzer.handle_simple_task(user_text)
             # Remove any file_path that might have been set
             result.pop("file_path", None)
             await swap.shutdown()
@@ -453,6 +460,12 @@ class TelegramBot:
             text = "📋 *추가 정보가 필요합니다:*\n\n" + "\n".join(f"• {q}" for q in questions)
         
         elif status in ("success", "need_info"):
+            text = f"✅ *완료*\n\n{result.get('message', 'Task completed')}"
+            # Only show workspace for non-chat tasks
+            if result.get("workspace") and result.get("path") != "chat":
+                text += f"\n\n📁 Workspace: `{result['workspace']}`"
+            if result.get("files"):
+                text += f"\n\n📄 Files:\n" + "\n".join(f" • `{f}`" for f in result["files"][:10])
             text = f"✅ *완료*\n\n{result.get('message', 'Task completed')}"
             if result.get("workspace"):
                 text += f"\n\n📁 Workspace: `{result['workspace']}`"
