@@ -358,6 +358,32 @@ class TelegramBot:
         
         # Analyze request
         analysis = await analyzer.analyze(user_text, available_tools)
+
+        if analysis.needs_clarification:
+            return {
+                "status": "clarification",
+                "questions": analysis.clarification_questions
+            }
+
+        if analysis.complexity == TaskComplexity.CHAT:
+            # Chat - respond without file generation
+            result = await analyzer.handle_simple_task(user_text)
+            # Remove any file_path that might have been set
+            result.pop("file_path", None)
+            await swap.shutdown()
+            return result
+        elif analysis.complexity == TaskComplexity.SIMPLE:
+            # Simple task - Brain handles directly
+            result = await analyzer.handle_simple_task(user_text)
+            await swap.shutdown()
+            return result
+        else:
+            # Complex task - need full loop
+            await swap.shutdown()
+            return {
+                "status": "complex",
+                "message": "Complex task detected. Full implementation coming soon."
+            }
         
         if analysis.needs_clarification:
             return {

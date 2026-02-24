@@ -426,6 +426,19 @@ class SessionManager:
                 f"{payload}\n\n--- Knowledge Graph Context ---\n{graph_context}"
             )
         
+        if analysis.complexity == TaskComplexity.CHAT:
+            # Chat messages - just respond, no file generation
+            result = await self._handle_chat(task_id, payload)
+        elif analysis.complexity == TaskComplexity.SIMPLE:
+            result = await self._handle_simple_task(task_id, enriched_payload)
+        else:
+            result = await self._handle_complex_task(task_id, enriched_payload)
+        enriched_payload = payload
+        if graph_context:
+            enriched_payload = (
+                f"{payload}\n\n--- Knowledge Graph Context ---\n{graph_context}"
+            )
+        
         if analysis.complexity == TaskComplexity.SIMPLE:
             result = await self._handle_simple_task(task_id, enriched_payload)
         else:
@@ -515,6 +528,55 @@ class SessionManager:
             result["workspace"] = str(workspace.project_root)
 
         result["task_id"] = task_id
+        result["path"] = "simple"
+        return result
+
+    async def _handle_chat(self, task_id: str, payload: str) -> dict:
+        """Handle chat/conversation - never generates files, just responds."""
+        from pyovis.mcp.tool_adapter import ToolEnabledLLM
+        from pyovis.ai.response_utils import parse_json_message
+        from datetime import datetime, timezone, timedelta
+
+        KST = timezone(timedelta(hours=9))
+        now_str = datetime.now(KST).strftime("%Y 년 %m 월 %d 일 %A %H:%M KST")
+
+        llm = ToolEnabledLLM(
+            swap_manager=self.model_swap,
+            role="brain",
+            tool_adapter=self.tool_adapter,
+            max_tool_iterations=5,
+        )
+        user_message = f"""현재 날짜/시간: {now_str}
+
+사용자 메시지: {payload}
+
+이것은 일반적인 대화 또는 인사말이다. **파일을 생성하지 마라**.
+
+다음 JSON 형식으로 응답하라:
+{{
+    "status": "success",
+    "result": "친근한 답변",
+    "message": "사용자에게 전달할 메시지"
+}}
+
+**중요**: file_path 를 포함하지 마라. 이 요청은 파일 생성이 필요 없다.
+"""
+        try:
+            response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+        finally:
+            await llm.aclose()
+
+        result = parse_json_message(
+            {"content": response},
+            default={"status": "success", "message": response},
+        )
+
+        # Ensure no file_path is set for chat
+        result.pop("file_path", None)
+
+        result["task_id"] = task_id
+        result["path"] = "chat"
+        return result
         result["path"] = "simple"
         return result
 
