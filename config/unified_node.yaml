@@ -1,0 +1,143 @@
+system:
+  name: "Pyvis"
+  version: "4.0.0"
+
+hardware:
+  cpu:
+    model: "AMD Ryzen 9 3900X"
+    cores: 12  # 6 cores, 12 threads
+    affinity:
+      interface:      [0, 1]
+      orchestration:  [2, 3]
+      ai_inference:   [4, 5, 6, 7]
+  gpu:
+    # Dual GPU parallel — only one model loaded at a time
+    split_mode: "layer"
+    tensor_split: "0.55,0.45"
+    devices:
+      - id: 0          # llama.cpp Device 0
+        name: "RTX 4070 SUPER"
+        vram_gb: 12
+        compute: "sm_89"
+        split_ratio: 0.55
+      - id: 1          # llama.cpp Device 1
+        name: "RTX 3060"
+        vram_gb: 12
+        compute: "sm_86"
+        split_ratio: 0.45
+
+server:
+  # Single server — role switching via model swap
+  port: 8001
+  host: "0.0.0.0"
+  n_gpu_layers: 60          # default; per-role overrides in models section
+  cache_type_k: "q8_0"
+  cache_type_v: "q8_0"
+  threads: 4
+  warmup_timeout: 120       # max wait for server startup (seconds)
+
+models:
+  planner:
+    file: "GLM-4.7-Flash-Q4_K_M.gguf"
+    path: "/pyovis_memory/models/GLM-4.7-Flash-Q4_K_M.gguf"
+    size_gb: 18
+    ctx_size: 65536           # 64K
+    n_gpu_layers: 60
+    jinja: false
+    fallback: "brain"         # fall back to Brain if Planner unavailable
+  brain:
+    file: "Qwen3-14B-Q5_K_M.gguf"
+    path: "/pyovis_memory/models/Qwen3-14B-Q5_K_M.gguf"
+    size_gb: 10
+    ctx_size: 40960
+    n_gpu_layers: 60
+    jinja: false
+    cache_type_k: "q4_0"     # KV cache q4 for Brain (saves VRAM vs q8)
+    cache_type_v: "q4_0"
+    fallback: null            # no fallback — Brain is essential
+  hands:
+    file: "mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
+    path: "/pyovis_memory/models/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
+    size_gb: 14
+    ctx_size: 80000           # 80K — validated on RTX 3060+4070S (22.2GB VRAM)
+    n_gpu_layers: 40          # fewer layers due to larger model size
+    jinja: true               # Devstral requires --jinja flag
+    fallback: "brain"         # fall back to Brain if Hands unavailable
+  judge:
+    file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"
+    path: "/pyovis_memory/models/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"
+    size_gb: 9
+    ctx_size: 65536           # 64K — Judge can use up to 128K
+    n_gpu_layers: 60
+    jinja: false
+    fallback: null            # no fallback — Judge must be independent
+
+model_swap:
+  # Model swap configuration
+  health_check_timeout: 90    # max wait after server start for health check (seconds)
+  health_check_interval: 1    # health check polling interval (seconds)
+  shutdown_timeout: 15        # server shutdown wait (seconds)
+  block_requests_during_swap: true  # block requests during swap
+
+  ai:
+    base_url: "http://localhost:8001"  # single port
+    planner:
+      system_prompt: "system/planner_prompt.txt"
+      temperature: 0.4
+      max_tokens: 4096
+      cot_strip: true
+      requires_model: "planner"
+    brain:
+      system_prompt: "system/brain_prompt.txt"
+      temperature: 0.7
+      max_tokens: 4096
+      cot_strip: true
+      requires_model: "brain"
+    hands:
+      system_prompt: "system/hands_prompt.txt"
+      temperature: 0.2
+      max_tokens: 8192
+      requires_model: "hands"
+    judge:
+      system_prompt: "system/judge_prompt.txt"
+      temperature: 0.1
+      max_tokens: 512
+      kv_cache_reset: true      # guaranteed by server restart
+      fresh_context: true
+      requires_model: "judge"
+
+research_loop:
+  max_loops: 5
+  max_consecutive_fails: 3
+  pass_threshold: 90
+  revise_threshold: 70
+  sandbox_timeout: 30
+  min_repeat_count: 3
+  min_task_diversity: 3
+  requires_human_review: true
+  # Swap cost: minimum 2 swaps per loop (Brain→Hands, Hands→Brain)
+  estimated_swap_time: 60     # estimated swap time (seconds)
+
+mcp:
+  requires_approval: true
+
+storage:
+  base_path: "/pyovis_memory"
+  models_path: "/pyovis_memory/models"
+  workspace_path: "/pyovis_memory/workspace"
+  logs_path: "/pyovis_memory/loop_records"
+
+sandbox:
+  type: "docker"
+  image: "pyovis-sandbox:latest"
+  tmpfs_path: "/dev/shm/pyovis_sandbox"
+  memory_limit: "512m"
+  cpu_limit: 1.0
+  network_enabled: false
+
+logging:
+  level: "INFO"
+  format: "json"
+  rotation: "daily"
+  retention: "30d"
+  swap_log: "/pyovis_memory/logs/swap.jsonl"  # model swap history

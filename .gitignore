@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Rust
+/target/
+*.rlib
+*.rmeta
+
+# llama.cpp
+llama.cpp/build/
+llama.cpp/main
+llama.cpp/llama-server
+*.gguf
+
+# Memory
+/pyvis_memory/
+*.faiss
+*.pkl
+
+# Logs
+*.log
+logs/
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Session files
+session-*.md
+
+# Backup files
+*.bak
+*.orig

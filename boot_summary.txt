@@ -1,0 +1,48 @@
+PYVIS v4.0 reboot summary (Feb 20 2026)
+
+Goal
+- Build PYVIS v4.0 (Rust core + Python orchestration) using llama.cpp on dual GPUs (RTX 4070 SUPER + RTX 3060) with single model loaded at a time.
+
+Current status
+- Rust core complete (priority queue, CPU affinity pool, model hotswap, PyO3 bindings). Tests pass.
+- llama.cpp built with CUDA (sm_86; sm_89). Binary: /Pyvis/llama.cpp/build/bin/llama-server
+- Models present:
+  - /pyvis_memory/models/Devstral-Small-2507-Q4_K_M.gguf (Hands/Judge)
+  - /pyvis_memory/models/Qwen3-14B-Q5_K_M.gguf (Brain)
+- Old 32B models removed.
+- Dual GPU split mode: --split-mode layer --tensor-split 0.55,0.45
+- GPU indexing: llama.cpp Device 0 = RTX 4070 SUPER, Device 1 = RTX 3060.
+
+Context size / KV settings (q8_0 KV)
+- Brain (Qwen3-14B): ctx 114688 (131072 segfault in real start)
+- Hands/Judge (Devstral): ctx 131072 OK
+- --parallel 1 used for max context
+
+Files updated
+- /Pyvis/scripts/start_model.sh
+  - Qwen3-14B brain, Devstral hands
+  - q8_0 KV, parallel 1
+  - brain ctx 114688, hands ctx 131072
+  - Devstral uses --jinja
+  - alias flag updated to --alias (latest change)
+- /Pyvis/config/unified_node.yaml
+  - ctx_size 114688, cache_type_k/v q8_0
+  - model paths updated to Qwen3 + Devstral
+- /Pyvis/pyvis/ai/swap_manager.py
+  - ctx_size 114688
+  - model paths updated to Qwen3 + Devstral
+  - add --parallel 1 and --alias
+
+Known issue before reboot
+- Multiple llama-server processes left in D/Z state; clean restart likely needs reboot.
+
+User requests to apply after reboot
+1) Continue steps: update AI clients (if needed), run Hands inference test, then update Pyvis_v4.md.
+2) Set context size to 80k for Judge + Planner ("plan-only" model).
+3) Add a new plan-only model: GLM-4.7-Flash~30B Q4_K_M (need path/download).
+   - Add planner role (new server or swap role), update start_model.sh/unified_node.yaml/swap_manager.py accordingly.
+
+Next actions after reboot
+- Kill any leftover llama-server, ensure port 8001 free.
+- Start brain & hands to validate inference.
+- Add planner model and route planning-only tasks to it.

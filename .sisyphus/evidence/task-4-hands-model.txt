@@ -1,0 +1,2 @@
+HANDS_MODEL="/pyvis_memory/models/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
+Shell syntax: OK

@@ -1,0 +1,2 @@
+ai keys: ['base_url', 'planner', 'brain', 'hands', 'judge']
+OK: judge correctly separated

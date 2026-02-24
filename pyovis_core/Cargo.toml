@@ -1,0 +1,14 @@
+[package]
+name = "pyovis_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "pyovis_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+libc = "0.2"
