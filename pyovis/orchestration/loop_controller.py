@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyovis.execution.file_writer import WorkspaceManager, FileWriter
+    from pyovis.memory.graph_builder import KnowledgeGraphBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class ResearchLoopController:
         planner=None,
         file_writer: Optional["FileWriter"] = None,
         workspace: Optional["WorkspaceManager"] = None,
+        kg_builder: Optional["KnowledgeGraphBuilder"] = None,
     ):
         self.brain = brain
         self.hands = hands
@@ -81,6 +83,7 @@ class ResearchLoopController:
         self.planner = planner
         self.file_writer = file_writer
         self.workspace = workspace
+        self.kg_builder = kg_builder
 
     async def _notify(self, ctx: LoopContext, message: str) -> None:
         if ctx.progress_callback is not None:
@@ -121,8 +124,12 @@ class ResearchLoopController:
                 current_task = ctx.todo_list[ctx.current_task_index]
                 total = len(ctx.todo_list)
                 idx = ctx.current_task_index + 1
-                task_title = current_task.get("title", current_task.get("description", ""))[:50]
-                await self._notify(ctx, f"🔨 코드 작성 중... ({idx}/{total}) {task_title}")
+                task_title = current_task.get(
+                    "title", current_task.get("description", "")
+                )[:50]
+                await self._notify(
+                    ctx, f"🔨 코드 작성 중... ({idx}/{total}) {task_title}"
+                )
                 skill_context = self.skill_manager.load_verified(ctx.task_description)
                 ctx.current_code, reasoning = await self.hands.build(
                     current_task, ctx.plan, skill_context
@@ -161,7 +168,16 @@ class ResearchLoopController:
                     "score": verdict.score,
                     "reason": verdict.reason,
                     "error_type": verdict.error_type,
+                    "thought_process": verdict.thought_process,
                 }
+
+                # Store Judge thought process in Knowledge Graph
+                if self.kg_builder and verdict.thought_process:
+                    await self._store_judge_reasoning(
+                        ctx=ctx,
+                        task=ctx.todo_list[ctx.current_task_index],
+                        verdict=verdict,
+                    )
 
                 if verdict.verdict == JudgeVerdict.PASS.value:
                     await self._save_current_code(ctx)
@@ -173,7 +189,10 @@ class ResearchLoopController:
                     else:
                         ctx.current_step = LoopStep.BUILD
 
-                elif verdict.verdict in (JudgeVerdict.REVISE.value, JudgeVerdict.ENRICH.value):
+                elif verdict.verdict in (
+                    JudgeVerdict.REVISE.value,
+                    JudgeVerdict.ENRICH.value,
+                ):
                     ctx.consecutive_fails += 1
                     ctx.fail_reasons.append(verdict.reason)
                     ctx.current_step = self._check_escalation(ctx)
@@ -185,7 +204,9 @@ class ResearchLoopController:
                 await self._notify(ctx, f"🔧 수정 중... (루프 {ctx.loop_count})")
                 current_task = ctx.todo_list[ctx.current_task_index]
                 if self._can_self_fix(ctx):
-                    skill_context = self.skill_manager.load_verified(ctx.task_description)
+                    skill_context = self.skill_manager.load_verified(
+                        ctx.task_description
+                    )
                     ctx.current_code, reasoning = await self.hands.revise(
                         current_task,
                         ctx.current_code or "",
@@ -247,12 +268,14 @@ class ResearchLoopController:
         file_path = current_task.get("file_path", f"output_{ctx.current_task_index}.py")
 
         result = self.file_writer.save_code(file_path, ctx.current_code)
-        ctx.created_files.append({
-            "task_id": ctx.current_task_index,
-            "file_path": file_path,
-            "saved_path": result.get("path"),
-            "size_bytes": result.get("size_bytes", 0),
-        })
+        ctx.created_files.append(
+            {
+                "task_id": ctx.current_task_index,
+                "file_path": file_path,
+                "saved_path": result.get("path"),
+                "size_bytes": result.get("size_bytes", 0),
+            }
+        )
 
     def _check_escalation(self, ctx: LoopContext) -> LoopStep:
         if ctx.consecutive_fails >= ctx.max_consecutive_fails:
@@ -276,3 +299,40 @@ class ResearchLoopController:
             "created_files": ctx.created_files,
             "reasoning_log": ctx.reasoning_log,
         }
+
+    async def _store_judge_reasoning(
+        self,
+        ctx: LoopContext,
+        task: dict,
+        verdict,
+    ) -> None:
+        """Store Judge reasoning in Knowledge Graph for future reference."""
+        try:
+            task_id = ctx.task_id
+            task_desc = task.get("description", "") or task.get("title", "")
+
+            # Add the reasoning as a triplet
+            await self.kg_builder.add_triplet(
+                subject=f"task_{task_id}",
+                predicate="judged_with_reasoning",
+                object=verdict.thought_process[:2000],
+            )
+
+            # Add the verdict as a triplet
+            await self.kg_builder.add_triplet(
+                subject=f"task_{task_id}",
+                predicate="verdict",
+                object=verdict.verdict,
+            )
+
+            # Add task description
+            await self.kg_builder.add_triplet(
+                subject=f"task_{task_id}",
+                predicate="has_description",
+                object=task_desc[:500],
+            )
+
+            logger.info(f"Stored Judge reasoning for task {task_id}")
+
+        except Exception as e:
+            logger.warning(f"Failed to store Judge reasoning in KG: {e}")
