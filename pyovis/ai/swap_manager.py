@@ -95,47 +95,12 @@ class SwapManagerConfig:
     fallbacks: dict = field(default_factory=lambda: {
         "planner": "brain",
         "hands": "brain",
-    })
-class SwapManagerConfig:
-    llama_server_bin: str = "/Pyvis/llama.cpp/build/bin/llama-server"
-    port: int = 8001
-    host: str = "0.0.0.0"
-    threads: int = 4
-    ctx_size: int = 114688
-    ctx_size_planner: int = 65536
-    ctx_size_brain: int = 40960
-    ctx_size_judge: int = 65536
-    ctx_size_hands: int = 80000
-    n_gpu_layers: int = 60
-    n_gpu_layers_hands: int = 40
-    n_gpu_layers_planner: int = 60
-    split_mode: str = "layer"
-    tensor_split: str = "0.55,0.45"
-    cache_type_k: str = "q8_0"
-    cache_type_v: str = "q8_0"
-    cache_type_k_brain: str = "q4_0"
-    cache_type_v_brain: str = "q4_0"
-    cpu_affinity: str = "4,5,6,7"
-    health_check_timeout: int = 90
-    health_check_interval: float = 1.0
-    shutdown_timeout: int = 15
-    log_dir: str = "/pyovis_memory/logs"
-    swap_log: str = "/pyovis_memory/logs/swap.jsonl"
-    warmup_timeout: int = 120
+})
 
-    models: dict = field(default_factory=lambda: {
-        "planner": "/pyovis_memory/models/GLM-4.7-Flash-Q4_K_M.gguf",
-        "brain": "/pyovis_memory/models/Qwen3-14B-Q5_K_M.gguf",
-        "hands": "/pyovis_memory/models/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf",
-        "judge": "/pyovis_memory/models/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
-    })
-
-    jinja_roles: set = field(default_factory=lambda: {"hands"})
-
-    fallbacks: dict = field(default_factory=lambda: {
-        "planner": "brain",
-        "hands": "brain",
-    })
+    # Backward compatibility aliases (v4.0 tests)
+    ctx_size_hands: int = field(default=80000)
+    cache_type_k_brain: str = field(default="q4_0")
+    cache_type_v_brain: str = field(default="q4_0")
 
 
 class ModelSwapManager:

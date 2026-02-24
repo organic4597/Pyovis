@@ -119,6 +119,22 @@ class TestSwapManagerConfig:
     def test_default_ctx_sizes(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
         cfg = SwapManagerConfig()
+        assert cfg.ctx_size_planner == 32768  # v5.1 reduced
+        assert cfg.ctx_size_brain == 32768    # v5.1 reduced
+        assert cfg.ctx_size_judge == 16384    # v5.1 reduced
+        assert cfg.ctx_size_hands_normal == 32768  # v5.1: symbol extraction success mode
+        assert cfg.ctx_size_hands_fallback == 58368  # v5.1: fallback mode
+        # Backward compatibility
+        assert cfg.ctx_size_hands == 80000
+    def test_ctx_size_for_each_role(self):
+        from pyovis.ai.swap_manager import SwapManagerConfig
+        cfg = SwapManagerConfig()
+        assert cfg.ctx_size_planner == 32768  # v5.1 reduced
+        assert cfg.ctx_size_brain == 32768    # v5.1 reduced
+        assert cfg.ctx_size_judge == 16384    # v5.1 reduced
+        # Backward compatibility
+        assert cfg.ctx_size_hands == 80000
+        cfg = SwapManagerConfig()
         assert cfg.ctx_size_planner == 65536
         assert cfg.ctx_size_brain == 40960  # Model limit: Qwen3-14B trained on 40K
         assert cfg.ctx_size_hands == 80000
@@ -132,6 +148,15 @@ class TestSwapManagerConfig:
         assert cfg.n_gpu_layers_planner == 60
 
     def test_default_kv_cache(self):
+        from pyovis.ai.swap_manager import SwapManagerConfig
+        cfg = SwapManagerConfig()
+        assert cfg.cache_type_k == "q8_0"
+        assert cfg.cache_type_v == "q8_0"
+        assert cfg.cache_type_k_hands_normal == "q8_0"  # v5.1
+        assert cfg.cache_type_k_hands_fallback == "q4_0"  # v5.1
+        # Backward compatibility
+        assert cfg.cache_type_k_brain == "q4_0"
+        assert cfg.cache_type_v_brain == "q4_0"
         from pyovis.ai.swap_manager import SwapManagerConfig
         cfg = SwapManagerConfig()
         assert cfg.cache_type_k == "q8_0"
@@ -173,7 +198,12 @@ class TestSwapManagerRoleParams:
             mgr = ModelSwapManager.__new__(ModelSwapManager)
             mgr.config = SwapManagerConfig()
 
-        assert mgr._ctx_size_for_role(ModelRole.PLANNER) == 65536
+        assert mgr._ctx_size_for_role(ModelRole.PLANNER) == 32768  # v5.1
+        assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 32768    # v5.1
+        assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 16384    # v5.1
+        # HANDS uses dual mode
+        assert mgr.config.ctx_size_hands_normal == 32768
+        assert mgr.config.ctx_size_hands_fallback == 58368
         assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 40960
         assert mgr._ctx_size_for_role(ModelRole.HANDS) == 80000
         assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 65536
