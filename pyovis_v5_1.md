@@ -7,6 +7,20 @@
 
 ## 변경 이력 (v5.0 → v5.1)
 
+### 2026-02-24 (Phase 3 완료)
+- ✅ **Section 6: Thought Instruction** — Judge 4 단계 체크리스트 구현 완료
+  - `CheckResult` 데이터클래스 추가 (투명한 평가 기록)
+  - `JudgeResult` 확장 (check_results, thought_process 필드)
+  - `EnhancedJudge` 클래스 구현 (`pyovis/ai/judge_enhanced.py`)
+  - Execution Plan 지원 (Hands 가 실행 방법 전달)
+- ✅ **Execution Plan 시스템** — Hands 가 Judge 에게 실행 지침 제공
+  - `ExecutionType` (script/module/test/function/API/CLI)
+  - `TestCase` 데이터클래스 (입력/출력/타임아웃)
+  - `create_execution_plan_from_task()` 헬퍼 (`pyovis/execution/execution_plan.py`)
+- ✅ **테스트 추가** — `test_judge_enhanced.py` (11 개 테스트, 모두 통과)
+
+### 2026-02-22
+
 | 항목 | v5.0 | v5.1 | 근거 |
 |---|---|---|---|
 | Hands KV Cache | q4_0 고정 | **q8_0 + ctx 32K** | Symbol 추출 시 입력 10K 미만 → q8_0 가능 |
@@ -609,7 +623,59 @@ async def evaluate(self, ...) -> JudgeResult:
         check_results=data.get("check_results", {}),
         thought_process=thought
     )
+### 6.4 구현 상세 (Phase 3 완료)
+
+실제 구현 파일:
+- `pyovis/ai/judge_enhanced.py` (392 줄) — Enhanced Judge 클래스
+- `pyovis/execution/execution_plan.py` (236 줄) — Execution Plan 데이터클래스
+- `tests/test_judge_enhanced.py` (11 개 테스트)
+
+```python
+# EnhancedJudge 사용 예시
+from pyovis.ai.judge_enhanced import EnhancedJudge
+
+judge = EnhancedJudge(swap_manager)
+result = await judge.evaluate(
+    task=task,
+    pass_criteria=criteria,
+    critic_result=critic_result,
+    execution_plan=exec_plan,  # NEW
+    loop_count=loop_count
+)
+
+# 결과 활용
+print(f"Verdict: {result.verdict}")
+print(f"Score: {result.score}")
+print(f"Thought Process: {result.thought_process}")
+
+# 체크리스트 결과 확인
+for check_name, check_result in result.check_results.items():
+    status = "✅" if check_result.passed else "❌"
+    print(f"{status} {check_name}: {check_result.details}")
 ```
+
+### 6.5 Execution Plan 활용
+
+Hands 가 생성한 실행 계획은 Judge 의 평가 정확도를 높입니다:
+
+```python
+# Hands 에서 생성
+from pyovis.execution.execution_plan import create_execution_plan_from_task
+
+exec_plan = create_execution_plan_from_task(
+    task=task,
+    code=generated_code,
+    pass_criteria=pass_criteria
+)
+
+# Judge 에 전달
+judge_result = await judge.evaluate(
+    ..., 
+    execution_plan=exec_plan.to_dict()
+)
+```
+
+---
 
 ---
 

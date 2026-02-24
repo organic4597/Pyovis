@@ -127,3 +127,60 @@ cd /Pyvis
 source .venv/bin/activate
 python run_unified.py
 ```
+
+---
+
+## 2026-02-24 — Phase 3 완료 (Judge 고도화)
+
+### 완료된 기능
+
+- ✅ **Execution Plan 시스템** — Hands 가 실행 방법을 Judge 에게 전달
+  - `pyovis/execution/execution_plan.py` (236 줄)
+  - ExecutionType (script/module/test/function/API/CLI)
+  - TestCase 데이터클래스 (입력/출력/타임아웃 검증)
+  - `create_execution_plan_from_task()` 헬퍼
+
+- ✅ **Enhanced Judge with Thought Instruction** — 4 단계 체크리스트
+  - `pyovis/ai/judge_enhanced.py` (392 줄)
+  - CHECK 1: Exit code validation
+  - CHECK 2: PASS criteria verification
+  - CHECK 3: Missing symbols detection
+  - CHECK 4: Error classification
+  - `CheckResult` 데이터클래스 (투명한 평가 기록)
+  - `JudgeResult` 확장 (check_results, thought_process)
+
+- ✅ **테스트 추가**
+  - `tests/test_judge_enhanced.py` (11 개 테스트, 모두 통과)
+  - `tests/test_ai_modules.py` 수정 (v5.1 context size 반영)
+
+### 테스트 결과
+
+- **전체**: 254 개 테스트 중 **249 개 통과 (98%)**
+- 실패 5 개:
+  - 3 개: Chat Chain edge case (diff/AST 우선순위 — 사소한 문제)
+  - 2 개: SwapManager config (미세 조정 필요)
+
+### 문서 업데이트
+
+- ✅ `pyovis_v5_1.md` — Section 6 (Thought Instruction) 상세화
+- ✅ `pyovis_v5_architecture.md` — Section 4.3-4.4 (Execution Plan, Judge) 추가
+
+### 생성된 파일
+
+```
+pyovis/
+├── ai/
+│   └── judge_enhanced.py ← NEW (392 lines)
+├── execution/
+│   └── execution_plan.py ← NEW (236 lines)
+tests/
+└── test_judge_enhanced.py ← NEW (11 tests)
+```
+
+### 다음 단계 (Phase 4)
+
+1. **Hands execution_plan 자동 생성** — Hands 프롬프트에 execution_plan 생성 추가
+2. **CriticRunner execution_plan 지원** — 실행 계획에 따른 테스트 자동화
+3. **Experience DB** — 성공/실패 패턴 저장 및 재활용 (Phase 4 주요 기능)
+
+---

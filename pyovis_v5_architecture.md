@@ -1,4 +1,7 @@
-# PYVIS v5.0 — 전체 아키텍처 설계서
+# PYVIS v5.1 — 전체 아키텍처 설계서
+> **목표**: Jarvis 형 자율 AI 비서
+> **구현 담당**: Claude Opus 4.6
+> **최종 수정**: 2026-02-24 (Phase 3 완료)
 > **목표**: Jarvis형 자율 AI 비서  
 > **구현 담당**: Claude Opus 4.6  
 > **최종 수정**: 2026-02-22
@@ -119,7 +122,13 @@ make -j$(nproc)
   --cache-type-k q8_0 --cache-type-v q8_0 \
   --tensor-split 12,12 --threads 4 --port 8002
 
-# Hands (Devstral) — KV Q4_0 필수, 58K 고정
+# Hands (Devstral) — v5.1: Dual Mode
+# Symbol 추출 성공: 32K + q8_0
+# Symbol 추출 실패: 58K + q4_0 (fallback)
+./llama-server -m Devstral-Small-2507-Q4_K_M.gguf \
+ -ngl 99 --ctx-size 32768 \
+ --cache-type-k q8_0 --cache-type-v q8_0 \
+ --tensor-split 12,12 --threads 4 --port 8003
 ./llama-server -m Devstral-Small-2507-Q4_K_M.gguf \
   -ngl 99 --ctx-size 58368 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
@@ -225,7 +234,96 @@ class ChatChainController:
 
         # max_turns 초과 시 마지막 상태로 강제 합의
         return ConsensusResult(agreed=False, messages=messages, turns=max_turns)
+### 4.2 Hard Limit 인터럽트 (v5.1)
 
+Chat Chain 은 **무한 루프 방지**를 위해 5 종 Hard Limit 을 가집니다:
+
+```python
+# pyovis/orchestration/hard_limit.py
+
+class HardLimitTrigger(str, Enum):
+    DIFF_TOO_SMALL = "diff_too_small"  # meaningless repetition (< 3 lines)
+    AST_ERROR_REPEAT = "ast_error_repeat"  # code structure collapse (2+)
+    CLARIFICATION_LOOP = "clarification_loop"  # unclear instructions (3+)
+    MAX_TURNS = "max_turns"  # turn limit exceeded
+    SYCOPHANCY = "sycophancy"  # blind agreement to erroneous code
+
+# Chat Chain Controller 에서 자동 체크
+async def consensus_loop(...):
+    for turn in range(max_turns):
+        # ... 대화 진행 ...
+        
+        # Hard Limit 체크
+        if diff_lines < min_diff_lines:
+            return ConsensusResult(
+                agreed=False,
+                termination_reason="hard_limit_diff"
+            )
+        
+        if ast_error_count >= max_ast_errors:
+            return ConsensusResult(
+                agreed=False,
+                termination_reason="hard_limit_ast"
+            )
+```
+
+### 4.3 Execution Plan (v5.1 Phase 3)
+
+Hands 가 Judge 에게 **실행 방법**을 전달합니다:
+
+```python
+# pyovis/execution/execution_plan.py
+
+@dataclass
+class ExecutionPlan:
+    execution_type: ExecutionType  # script/module/test/function/API/CLI
+    entry_point: Optional[str]
+    test_cases: list[TestCase]
+    expected_files: list[str]
+    environment_vars: dict
+
+# Hands 에서 생성
+exec_plan = create_execution_plan_from_task(task, code, pass_criteria)
+
+# Judge 에 전달
+judge_result = await judge.evaluate(
+    task=task,
+    pass_criteria=criteria,
+    critic_result=critic_result,
+    execution_plan=exec_plan.to_dict()  # NEW
+)
+```
+
+### 4.4 Thought Instruction — Judge 4 단계 체크리스트 (v5.1 Phase 3)
+
+Judge 는 **블랙박스 판단이 아닌 투명한 4 단계 체크리스트**를 수행합니다:
+
+```python
+# pyovis/ai/judge_enhanced.py
+
+class EnhancedJudge:
+    """4-step Thought Instruction checklist"""
+    
+    async def evaluate(self, ...) -> JudgeResult:
+        # CHECK 1: Exit code validation
+        # CHECK 2: PASS criteria verification
+        # CHECK 3: Missing symbols detection
+        # CHECK 4: Error classification
+        
+        return JudgeResult(
+            verdict="PASS",
+            score=95,
+            check_results={
+                "exit_code": CheckResult("exit_code", True, "Exit code 0"),
+                "criterion_0": CheckResult("criterion_0", True, "SATISFIED"),
+                "missing_symbols": CheckResult("missing_symbols", False, "requests not found"),
+            },
+            thought_process="[CHECK 1] Exit code is 0 ✓\n[CHECK 2] ...",
+            execution_plan_validated=True
+        )
+```
+
+---
 
 # 사용 예시
 
