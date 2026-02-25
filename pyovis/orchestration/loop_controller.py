@@ -10,6 +10,10 @@ if TYPE_CHECKING:
     from pyovis.execution.file_writer import WorkspaceManager, FileWriter
     from pyovis.memory.graph_builder import KnowledgeGraphBuilder
 
+from pyovis.execution.snapshot import WorkspaceSnapshot
+    from pyovis.execution.file_writer import WorkspaceManager, FileWriter
+    from pyovis.memory.graph_builder import KnowledgeGraphBuilder
+
 logger = logging.getLogger(__name__)
 
 MSG_HUMAN_ESCALATION = "자동 해결 불가. 사람의 판단이 필요합니다."
@@ -93,6 +97,19 @@ class ResearchLoopController:
                 pass
 
     async def run(self, ctx: LoopContext) -> dict:
+        self.tracker.start(ctx.task_id, ctx.task_description)
+
+        if self.file_writer and self.workspace:
+            ctx.workspace = self.workspace
+            ctx.project_id = self.workspace.project_id
+            
+            # Initialize snapshot system
+            snapshot_mgr = WorkspaceSnapshot(str(self.workspace.project_root))
+            initial_snapshot = snapshot_mgr.save("Before loop start")
+            if initial_snapshot:
+                logger.info(f"Initial snapshot saved: {initial_snapshot.id[:8]}")
+
+        while ctx.current_step != LoopStep.COMPLETE:
         self.tracker.start(ctx.task_id, ctx.task_description)
 
         if self.file_writer and self.workspace:
@@ -189,7 +206,20 @@ class ResearchLoopController:
                     else:
                         ctx.current_step = LoopStep.BUILD
 
-                elif verdict.verdict in (
+        elif verdict.verdict in (
+            JudgeVerdict.REVISE.value, JudgeVerdict.ENRICH.value
+        ):
+            ctx.consecutive_fails += 1
+            ctx.fail_reasons.append(verdict.reason)
+            
+            # Rollback if too many consecutive fails
+            if ctx.consecutive_fails >= 2 and self.file_writer and self.workspace:
+                snapshot_mgr = WorkspaceSnapshot(str(self.workspace.project_root))
+                if snapshot_mgr.rollback_to_previous():
+                    logger.info(f"Rolled back to previous snapshot after {ctx.consecutive_fails} fails")
+                    ctx.consecutive_fails = 0  # Reset after rollback
+            
+            ctx.current_step = self._check_escalation(ctx)
                     JudgeVerdict.REVISE.value,
                     JudgeVerdict.ENRICH.value,
                 ):
