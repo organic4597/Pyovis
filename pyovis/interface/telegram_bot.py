@@ -358,14 +358,22 @@ class TelegramBot:
         
         # Analyze request
         analysis = await analyzer.analyze(user_text, available_tools)
-        
+
         if analysis.needs_clarification:
             return {
                 "status": "clarification",
                 "questions": analysis.clarification_questions
             }
-        
-        if analysis.complexity == TaskComplexity.SIMPLE:
+
+        if analysis.complexity == TaskComplexity.CHAT:
+            # Chat - respond without file generation
+            result = await analyzer.handle_simple_task(user_text)
+            # Remove any file_path or workspace that might have been set
+            result.pop("file_path", None)
+            result.pop("workspace", None)
+            await swap.shutdown()
+            return result
+        elif analysis.complexity == TaskComplexity.SIMPLE:
             # Simple task - Brain handles directly
             result = await analyzer.handle_simple_task(user_text)
             await swap.shutdown()
@@ -428,10 +436,11 @@ class TelegramBot:
         
         elif status in ("success", "need_info"):
             text = f"✅ *완료*\n\n{result.get('message', 'Task completed')}"
-            if result.get("workspace"):
+            # Only show workspace for non-chat tasks
+            if result.get("workspace") and result.get("path") != "chat":
                 text += f"\n\n📁 Workspace: `{result['workspace']}`"
             if result.get("files"):
-                text += f"\n\n📄 Files:\n" + "\n".join(f"  • `{f}`" for f in result["files"][:10])
+                text += f"\n\n📄 Files:\n" + "\n".join(f" • `{f}`" for f in result["files"][:10])
         
         elif status == "complex":
             text = f"🔄 *복잡한 작업*\n\n{result.get('message', 'Processing...')}"
