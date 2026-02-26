@@ -133,13 +133,16 @@ class ResearchLoopController:
                 await self._notify(
                     ctx, f"🔨 코드 작성 시작 (총 {len(ctx.todo_list)} 단계)..."
                 )
+                logger.info(f"[DEBUG] BUILD 시작: todo_list 개수={len(ctx.todo_list)}")
 
                 # 스킬 컨텍스트 로드 (한 번만)
                 skill_context = self.skill_manager.load_verified(ctx.task_description)
+                logger.info(f"[DEBUG] skill_context 로드 완료: {len(skill_context)} bytes")
 
                 full_code_parts = []
                 all_success = True
 
+                logger.info(f"[DEBUG] For 루프 시작 전")
                 # [중요] todo_list 전체를 순회 (For Loop)
                 for i, task in enumerate(ctx.todo_list):
                     idx = i + 1
@@ -150,6 +153,7 @@ class ResearchLoopController:
                     await self._notify(
                         ctx, f"🔨 코드 작성 중... ({idx}/{total}) {task_title}"
                     )
+                    logger.info(f"[DEBUG] Task {idx}/{total} notify 완료")
 
                     try:
                         # Hands 모델에 코드 생성 요청
@@ -289,19 +293,24 @@ class ResearchLoopController:
             # ============================================================
             elif ctx.current_step == LoopStep.ESCALATE:
                 await self._notify(ctx, "⚠️ 에스컬레이션 처리 중...")
+                logger.info(f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}")
                 if ctx.loop_count >= ctx.max_loops:
                     return self._human_escalation(ctx)
 
                 escalation_result, reasoning = await self.brain.handle_escalation(ctx)
                 if reasoning:
                     ctx.reasoning_log.append(f"[ESCALATE] {reasoning}")
+                logger.info(f"[DEBUG] Brain escalation_result: {escalation_result}")
+                logger.info(f"[DEBUG] escalation_result.get('action') = {escalation_result.get('action')}")
                 if escalation_result.get("action") == "revise_plan":
                     ctx.plan = escalation_result["new_plan"]
                     ctx.todo_list = escalation_result["new_todo"]
                     ctx.pass_criteria = escalation_result["new_criteria"]
                     ctx.consecutive_fails = 0
+                    ctx.current_task_index = 0  # Reset index for new todo_list
                     ctx.current_step = LoopStep.BUILD
                 else:
+                    logger.info(f"[DEBUG] Brain 반환: action != 'revise_plan', 사람 에스케일레이션 실행")
                     return self._human_escalation(ctx)
 
         # ============================================================
