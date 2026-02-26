@@ -9,10 +9,7 @@ from typing import Awaitable, Callable, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from pyovis.execution.file_writer import WorkspaceManager, FileWriter
     from pyovis.memory.graph_builder import KnowledgeGraphBuilder
-
 from pyovis.execution.snapshot import WorkspaceSnapshot
-    from pyovis.execution.file_writer import WorkspaceManager, FileWriter
-    from pyovis.memory.graph_builder import KnowledgeGraphBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -102,21 +99,11 @@ class ResearchLoopController:
         if self.file_writer and self.workspace:
             ctx.workspace = self.workspace
             ctx.project_id = self.workspace.project_id
-            
-            # Initialize snapshot system
-            snapshot_mgr = WorkspaceSnapshot(str(self.workspace.project_root))
-            initial_snapshot = snapshot_mgr.save("Before loop start")
-            if initial_snapshot:
-                logger.info(f"Initial snapshot saved: {initial_snapshot.id[:8]}")
 
         while ctx.current_step != LoopStep.COMPLETE:
-        self.tracker.start(ctx.task_id, ctx.task_description)
-
-        if self.file_writer and self.workspace:
-            ctx.workspace = self.workspace
-            ctx.project_id = self.workspace.project_id
-
-        while ctx.current_step != LoopStep.COMPLETE:
+            # ============================================================
+            # 1. PLAN 단계: 계획 수립
+            # ============================================================
             if ctx.current_step == LoopStep.PLAN:
                 await self._notify(ctx, "⚙️ 계획 수립 중...")
                 if self.planner is not None:
@@ -137,24 +124,75 @@ class ResearchLoopController:
                 ctx.current_step = LoopStep.BUILD
                 self.tracker.record_switch("brain_to_hands", ctx.task_id)
 
+            # ============================================================
+            # 2. BUILD 단계: 코드 생성 (핵심 수정 구역)
+            #    [중요] todo_list 전체를 순회하며 코드 생성
+            #    for 루프가 다 끝날 때까지 CRITIQUE로 절대 일찍 이동하지 않음
+            # ============================================================
             elif ctx.current_step == LoopStep.BUILD:
-                current_task = ctx.todo_list[ctx.current_task_index]
-                total = len(ctx.todo_list)
-                idx = ctx.current_task_index + 1
-                task_title = current_task.get(
-                    "title", current_task.get("description", "")
-                )[:50]
                 await self._notify(
-                    ctx, f"🔨 코드 작성 중... ({idx}/{total}) {task_title}"
+                    ctx, f"🔨 코드 작성 시작 (총 {len(ctx.todo_list)} 단계)..."
                 )
-                skill_context = self.skill_manager.load_verified(ctx.task_description)
-                ctx.current_code, reasoning = await self.hands.build(
-                    current_task, ctx.plan, skill_context
-                )
-                if reasoning:
-                    ctx.reasoning_log.append(f"[BUILD] {reasoning}")
-                ctx.current_step = LoopStep.CRITIQUE
 
+                # 스킬 컨텍스트 로드 (한 번만)
+                skill_context = self.skill_manager.load_verified(ctx.task_description)
+
+                full_code_parts = []
+                all_success = True
+
+                # [중요] todo_list 전체를 순회 (For Loop)
+                for i, task in enumerate(ctx.todo_list):
+                    idx = i + 1
+                    total = len(ctx.todo_list)
+                    task_title = task.get("title", task.get("description", ""))[:50]
+
+                    # 진행 상황 알림
+                    await self._notify(
+                        ctx, f"🔨 코드 작성 중... ({idx}/{total}) {task_title}"
+                    )
+
+                    try:
+                        # Hands 모델에 코드 생성 요청
+                        result = await self.hands.build(task, ctx.plan, skill_context)
+
+                        # 결과 언패킹 (2-tuple 또는 3-tuple 모두 처리)
+                        part_code = result[0] if len(result) > 0 else None
+                        reasoning = result[1] if len(result) > 1 else None
+
+                        # Reasoning 기록
+                        if reasoning:
+                            ctx.reasoning_log.append(f"[BUILD-{idx}] {reasoning}")
+
+                        # 코드 조각 축적
+                        if part_code:
+                            full_code_parts.append(part_code)
+                            logger.info(f"✅ {idx}/{total} 단계 코드 생성 완료")
+                        else:
+                            logger.warning(
+                                f"⚠️ {idx}/{total} 단계에서 코드가 생성되지 않았습니다."
+                            )
+
+                    except Exception as e:
+                        logger.error(f"❌ {idx}/{total} 단계 코드 생성 실패: {e}")
+                        ctx.reasoning_log.append(f"[BUILD-ERROR-{idx}] {str(e)}")
+                        all_success = False
+                        # 에러가 나도 나머지 작업을 계속 진행
+
+                # [중요] 모든 루프가 끝난 후 코드 병합
+                if full_code_parts:
+                    ctx.current_code = "\n\n".join(full_code_parts)
+                    logger.info(f"✅ 전체 코드 병합 완료 ({len(full_code_parts)} 단계)")
+                else:
+                    ctx.current_code = None
+                    logger.error("❌ 생성된 코드가 없습니다.")
+
+                # 다음 단계로 이동 (CRITIQUE)
+                ctx.current_step = LoopStep.CRITIQUE
+                ctx.current_task_index = 0  # 인덱스 초기화
+
+            # ============================================================
+            # 3. CRITIQUE 단계: 실행 및 테스트
+            # ============================================================
             elif ctx.current_step == LoopStep.CRITIQUE:
                 await self._notify(ctx, "🧪 실행 테스트 중...")
                 if ctx.current_code is None:
@@ -169,6 +207,9 @@ class ResearchLoopController:
                 }
                 ctx.current_step = LoopStep.EVALUATE
 
+            # ============================================================
+            # 4. EVALUATE 단계: Judge 평가
+            # ============================================================
             elif ctx.current_step == LoopStep.EVALUATE:
                 await self._notify(ctx, "⚖️ 평가 중...")
                 verdict = await self.judge.evaluate(
@@ -185,11 +226,12 @@ class ResearchLoopController:
                     "score": verdict.score,
                     "reason": verdict.reason,
                     "error_type": verdict.error_type,
-                    "thought_process": verdict.thought_process,
+                    "thought_process": getattr(verdict, "thought_process", None),
                 }
 
                 # Store Judge thought process in Knowledge Graph
-                if self.kg_builder and verdict.thought_process:
+                thought_process = getattr(verdict, "thought_process", None)
+                if self.kg_builder and thought_process:
                     await self._store_judge_reasoning(
                         ctx=ctx,
                         task=ctx.todo_list[ctx.current_task_index],
@@ -204,22 +246,9 @@ class ResearchLoopController:
                     if ctx.current_task_index >= len(ctx.todo_list):
                         ctx.current_step = LoopStep.COMPLETE
                     else:
-                        ctx.current_step = LoopStep.BUILD
+                        ctx.current_step = LoopStep.CRITIQUE
 
-        elif verdict.verdict in (
-            JudgeVerdict.REVISE.value, JudgeVerdict.ENRICH.value
-        ):
-            ctx.consecutive_fails += 1
-            ctx.fail_reasons.append(verdict.reason)
-            
-            # Rollback if too many consecutive fails
-            if ctx.consecutive_fails >= 2 and self.file_writer and self.workspace:
-                snapshot_mgr = WorkspaceSnapshot(str(self.workspace.project_root))
-                if snapshot_mgr.rollback_to_previous():
-                    logger.info(f"Rolled back to previous snapshot after {ctx.consecutive_fails} fails")
-                    ctx.consecutive_fails = 0  # Reset after rollback
-            
-            ctx.current_step = self._check_escalation(ctx)
+                elif verdict.verdict in (
                     JudgeVerdict.REVISE.value,
                     JudgeVerdict.ENRICH.value,
                 ):
@@ -230,6 +259,9 @@ class ResearchLoopController:
                 elif verdict.verdict == JudgeVerdict.ESCALATE.value:
                     ctx.current_step = LoopStep.ESCALATE
 
+            # ============================================================
+            # 5. REVISE / ENRICH 단계: 수정 및 보강
+            # ============================================================
             elif ctx.current_step in (LoopStep.REVISE, LoopStep.ENRICH):
                 await self._notify(ctx, f"🔧 수정 중... (루프 {ctx.loop_count})")
                 current_task = ctx.todo_list[ctx.current_task_index]
@@ -252,6 +284,9 @@ class ResearchLoopController:
                 else:
                     ctx.current_step = LoopStep.ESCALATE
 
+            # ============================================================
+            # 6. ESCALATE 단계: 에스컬레이션
+            # ============================================================
             elif ctx.current_step == LoopStep.ESCALATE:
                 await self._notify(ctx, "⚠️ 에스컬레이션 처리 중...")
                 if ctx.loop_count >= ctx.max_loops:
@@ -269,6 +304,9 @@ class ResearchLoopController:
                 else:
                     return self._human_escalation(ctx)
 
+        # ============================================================
+        # 루프 종료 후: 최종 리뷰 및 스킬 평가
+        # ============================================================
         logger.info("🏁 최종 리뷰 시작...")
         self.tracker.record_switch("hands_to_brain", ctx.task_id)
         final_result, reasoning = await self.brain.final_review(ctx)
@@ -341,11 +379,15 @@ class ResearchLoopController:
             task_id = ctx.task_id
             task_desc = task.get("description", "") or task.get("title", "")
 
+            thought_process = getattr(verdict, "thought_process", None)
+            if not thought_process:
+                return
+
             # Add the reasoning as a triplet
             await self.kg_builder.add_triplet(
                 subject=f"task_{task_id}",
                 predicate="judged_with_reasoning",
-                object=verdict.thought_process[:2000],
+                object=thought_process[:2000],
             )
 
             # Add the verdict as a triplet

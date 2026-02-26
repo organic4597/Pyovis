@@ -84,9 +84,9 @@ class SwapManagerConfig:
     warmup_timeout: int = 120
     
     models: dict = field(default_factory=lambda: {
-        "planner": "/pyovis_memory/models/GLM-4.7-Flash-Q4_K_M.gguf",
+        "planner": "/pyovis_memory/models/Qwen3-14B-Q5_K_M.gguf",
         "brain": "/pyovis_memory/models/Qwen3-14B-Q5_K_M.gguf",
-        "hands": "/pyovis_memory/models/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf",
+        "hands": "/pyovis_memory/models/Qwen3-14B-Q5_K_M.gguf",
         "judge": "/pyovis_memory/models/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
     })
     
@@ -98,7 +98,7 @@ class SwapManagerConfig:
 })
 
     # Backward compatibility aliases (v4.0 tests)
-    ctx_size_hands: int = field(default=80000)
+    ctx_size_hands: int = field(default=16384)
     cache_type_k_brain: str = field(default="q4_0")
     cache_type_v_brain: str = field(default="q4_0")
 
@@ -254,6 +254,7 @@ class ModelSwapManager:
             )
 
         logger.info(f"Started llama-server PID={self._process.pid} for {role}")
+        self.wait_for_health_sync(role)
 
     async def _stop_server(self):
         if self._process is None:
@@ -398,3 +399,54 @@ class ModelSwapManager:
             "port": self.config.port,
             "pid": self._process.pid if self._process else None,
         }
+
+    async def wait_for_health(self, role: str, port: int = 8001, timeout: int = 120) -> None:
+        '''
+        llama-server 가 실제 HTTP 요청에 응답할 때까지 대기 (헬스체크).
+        '''
+        logger.info(f'🏥 [{role}] 헬스체크 시작 (port={port}, timeout={timeout}s)...')
+        start_time = asyncio.get_event_loop().time()
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    resp = await client.get(f'http://localhost:{port}/', timeout=5.0)
+                    if resp.status_code == 200:
+                        logger.info(f'✅ [{role}] 헬스체크 성공 (응답받음)')
+                        return
+                except Exception:
+                    pass
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > timeout:
+                    logger.error(f'❌ [{role}] 헬스체크 타임아웃 ({timeout}초 초과)')
+                    raise TimeoutError(f'[{role}] 헬스체크 실패: {timeout}초 동안 응답 없음')
+                await asyncio.sleep(0.5)
+
+    def wait_for_health_sync(self, role: str, port: int = 8001, timeout: int = 120) -> None:
+        '''
+        [동기] llama-server 가 실제 HTTP 요청에 응답할 때까지 대기.
+        '''
+        import time
+        import urllib.request
+        import urllib.error
+        
+        logger.info(f'🏥 [{role}] 헬스체크 시작 (port={port}, timeout={timeout}s)...')
+        start_time = time.time()
+        url = f'http://localhost:{port}/'
+        
+        while True:
+            try:
+                req = urllib.request.urlopen(url, timeout=5)
+                if req.status == 200:
+                    logger.info(f'✅ [{role}] 헬스체크 성공 (응답받음)')
+                    return
+            except Exception:
+                pass # 연결 안 되면 계속 대기
+            
+            # 타임아웃 체크
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                logger.error(f'❌ [{role}] 헬스체크 타임아웃 ({timeout}초 초과)')
+                raise TimeoutError(f'[{role}] 헬스체크 실패: {timeout}초 동안 응답 없음')
+            
+            # 0.5 초 대기 후 재시도
+            time.sleep(0.5)

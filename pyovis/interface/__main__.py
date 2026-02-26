@@ -1,3 +1,4 @@
+import os
 """
 Pyovis v4.0 - AI Coding Agent
 
