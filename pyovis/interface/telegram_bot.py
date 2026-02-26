@@ -114,6 +114,7 @@ class TelegramBot:
         self._pending_results: dict[str, asyncio.Future[dict]] = {}
         self._result_callbacks: dict[str, Callable[[dict], Awaitable[None]]] = {}
         self._pending_approvals: dict[int, dict] = {}
+        self._pending_escalations: dict[int, dict] = {}  # Track escalated tasks per chat_id
         self._owner_chat_id: int | None = _load_chat_id()
 
     async def start(self) -> None:
@@ -157,14 +158,67 @@ class TelegramBot:
             return
         for chunk in split_message(text):
             try:
-                await self.application.bot.send_message(
-                    chat_id=chat_id, text=chunk, parse_mode=parse_mode
+                await asyncio.wait_for(
+                    self.application.bot.send_message(
+                        chat_id=chat_id, text=chunk, parse_mode=parse_mode
+                    ),
+                    timeout=5.0
                 )
+            except asyncio.TimeoutError:
+                logger.warning(f"send_message timeout for chat_id={chat_id}")
             except Exception:
                 try:
-                    await self.application.bot.send_message(chat_id=chat_id, text=chunk)
+                    await asyncio.wait_for(
+                        self.application.bot.send_message(chat_id=chat_id, text=chunk),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"send_message fallback timeout for chat_id={chat_id}")
                 except Exception as e:
                     logger.warning("send_message failed: %s", e)
+
+    def _store_escalation(self, chat_id: int, result: dict) -> None:
+        """Store escalation details for follow-up questions."""
+        self._pending_escalations[chat_id] = {
+            "fail_reasons": result.get("fail_reasons", []),
+            "loop_count": result.get("loop_count", "?"),
+            "created_files": result.get("created_files", []),
+            "project_id": result.get("project_id"),
+            "message": result.get("message", ""),
+            "task_id": result.get("task_id"),
+        }
+
+    async def _send_escalation_details(self, chat_id: int, escalation: dict) -> None:
+        """Send detailed escalation explanation to user."""
+        text = "⚠️ *에스캼레이션 상세 정보*\n\n"
+        
+        if escalation.get("message"):
+            text += f"{escalation['message']}\n\n"
+        
+        # 실패 원인
+        fail_reasons = escalation.get("fail_reasons", [])
+        if fail_reasons:
+            text += "🔴 *실패 원인:*\n" + "\n".join(f"• {r}" for r in fail_reasons[:5]) + "\n\n"
+        
+        # 루프 정보
+        loop_count = escalation.get("loop_count", "?")
+        text += f"🔄 루프 횟수: {loop_count}\n\n"
+        
+        # 생성된 파일
+        created_files = escalation.get("created_files", [])
+        if created_files:
+            files = [f.get("file_path", f.get("saved_path", "?")) for f in created_files[:3]]
+            text += "📄 *생성된 파일:*\n" + "\n".join(f"• `{f}`" for f in files) + "\n\n"
+        
+        # 프로젝트 경로
+        if escalation.get("project_id"):
+            text += f"📁 Project: `{escalation['project_id']}`\n\n"
+        
+        text += "*해결 방법:*\n"
+        text += "• 에러를 확인하고 요청을 더 구체적으로 수정하세요\n"
+        text += "• 또는 생성된 파일을 수동으로 수정하세요"
+        
+        await self._safe_send(chat_id, text)
     
     # --- Command Handlers ---
     
@@ -321,6 +375,18 @@ class TelegramBot:
 
         logger.info("📨 텔레그램 메시지 수신 (chat=%d): %s", chat_id, user_text[:80])
 
+        # Check if there's a pending escalation for this chat
+        if chat_id in self._pending_escalations:
+            # User is following up on an escalated task
+            if len(user_text) < 50 and any(word in user_text.lower() for word in ["뭐", "왜", "문제", "이유", "what", "why", "problem", "reason", "어떻게", "해결"]):
+                # Short follow-up question about the escalation
+                escalation = self._pending_escalations[chat_id]
+                await self._send_escalation_details(chat_id, escalation)
+                return
+            else:
+                # New substantial request - clear escalation state
+                self._pending_escalations.pop(chat_id, None)
+
         async def keep_typing():
             while True:
                 try:
@@ -425,11 +491,17 @@ class TelegramBot:
 
     async def send_progress(self, chat_id: int, text: str) -> None:
         """Send a progress notification to a chat. Called by SessionManager."""
-        await self._safe_send(chat_id, text)
+        try:
+            await asyncio.wait_for(self._safe_send(chat_id, text), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"send_progress timeout for chat_id={chat_id}")
+        except Exception as e:
+            logger.warning(f"send_progress failed: {e}")
     
     async def _send_response(self, chat_id: int, result: dict) -> None:
         status = result.get("status", "unknown")
         
+        logger.info(f"[DEBUG] _send_response: status={status}, result keys={list(result.keys())}")
         if status == "clarification":
             questions = result.get("questions", [])
             text = "📋 *추가 정보가 필요합니다:*\n\n" + "\n".join(f"• {q}" for q in questions)
@@ -446,9 +518,27 @@ class TelegramBot:
             text = f"🔄 *복잡한 작업*\n\n{result.get('message', 'Processing...')}"
         
         elif status == "escalated":
-            text = f"⚠️ *에스컬레이션*\n\n{result.get('message', 'Human intervention needed')}"
+            # Store escalation for follow-up questions
+            self._store_escalation(chat_id, result)
+            
+            text = f"⚠️ *에스캼레이션*\n\n{result.get('message', 'Human intervention needed')}"
+            
+            # 실패 원인
             if result.get("fail_reasons"):
-                text += "\n\n실패 원인:\n" + "\n".join(f"• {r}" for r in result["fail_reasons"][:5])
+                text += "\n\n🔴 *실패 원인:*\n" + "\n".join(f"• {r}" for r in result["fail_reasons"][:5])
+            
+            # 루프 정보
+            loop_count = result.get("loop_count", "?")
+            text += f"\n\n🔄 루프 횟수: {loop_count}"
+            
+            # 생성된 파일 (있으면)
+            if result.get("created_files"):
+                files = [f.get("file_path", f.get("saved_path", "?")) for f in result["created_files"][:3]]
+                text += "\n\n📄 *생성된 파일:*\n" + "\n".join(f"• `{f}`" for f in files)
+            
+            # 프로젝트 경로
+            if result.get("project_id"):
+                text += f"\n\n📁 Project: `{result['project_id']}`"
         
         elif status == "queued":
             text = f"⏳ *대기 중*\n\n{result.get('message', 'Task queued')}"
