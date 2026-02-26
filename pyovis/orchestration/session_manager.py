@@ -426,10 +426,29 @@ class SessionManager:
                 f"{payload}\n\n--- Knowledge Graph Context ---\n{graph_context}"
             )
         
-        if analysis.complexity == TaskComplexity.SIMPLE:
+        # [v5.4] Brain 직접 실행 (Tool-First Optimization)
+        # Planner/Hands 불필요. Brain 이 도구만 써서 끝내면 됨.
+        is_tool_only_task = (
+            analysis.complexity in [TaskComplexity.SIMPLE, TaskComplexity.CHAT] and
+            analysis.tool_status in [ToolStatus.ALREADY_AVAILABLE, ToolStatus.NOT_NEEDED, ToolStatus.NEEDED_APPROVED, ToolStatus.NEEDED_PENDING] and
+            any(t in analysis.available_tools_to_use for t in ['fetch', 'brave-search', 'browser'])
+        )
+
+        if analysis.complexity == TaskComplexity.CHAT:
+            # 단순 인사/잡담
+            result = await self._handle_chat(task_id, payload)
+        elif is_tool_only_task:
+            # [최우선] 도구로 끝나는 건 Brain 이 바로 처리 (대기시간 0)
+            logger.info(f"🚀 [Optimization] 도구 감지! Brain 이 직접 처리 (tools: {analysis.available_tools_to_use})")
+            result = await self._handle_brain_direct(task_id, enriched_payload, analysis.available_tools_to_use)
+        elif analysis.complexity == TaskComplexity.SIMPLE:
+            # 순수 코드 생성 작업
             result = await self._handle_simple_task(task_id, enriched_payload)
         else:
+            # 복잡한 작업 (전체 루프)
             result = await self._handle_complex_task(task_id, enriched_payload)
+
+        # Result metadata and KG ingestion
         
         result["tool_status"] = analysis.tool_status.value
         result["tools_used"] = analysis.available_tools_to_use
@@ -463,6 +482,44 @@ class SessionManager:
             logger.debug("session_manager: graph ingestion skipped", exc_info=True)
 
 
+    
+    async def _handle_brain_direct(self, task_id: str, payload: str, tools: list[str]) -> dict:
+        """
+        Brain 이 직접 도구을 실행하여 처리 (코드 생성 불필요한 단순 작업).
+        예: 날씨, 뉴스, 레딧 정보 수집 등
+        """
+        logger.info(f"🧠 [Direct] Brain 이 직접 도구 실행 (tools: {', '.join(tools)})")
+        
+        from pyovis.mcp.tool_adapter import ToolEnabledLLM
+        
+        llm = ToolEnabledLLM(
+            swap_manager=self.model_swap,
+            role="brain",
+            tool_adapter=self.tool_adapter,
+            max_tool_iterations=5
+        )
+        
+        user_message = f"""사용자 요청: {payload}
+
+당신은 똑똑한 비서입니다. 위 요청을 해결하기 위해 주어진 도구 (fetch 등) 를 직접 사용하여 작업을 완료하세요.
+절대로 코드를 생성하지 마세요. 도구 호출이 불가능한 경우에만 답변을 생성하세요.
+"""
+        # tools_schema 주입
+        # (ToolEnabledLLM 이 self.tool_adapter 를 통해 자동으로 인식)
+
+        try:
+            result_content = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+            return {
+                "status": "success",
+                "message": result_content,
+                "path": "brain_direct"
+            }
+        except Exception as e:
+            logger.error(f"Brain 직접 처리 중 오류: {e}")
+            return {"status": "error", "message": str(e)}
+        finally:
+            await llm.aclose()
+
     async def _handle_simple_task(self, task_id: str, payload: str) -> dict:
         from pyovis.mcp.tool_adapter import ToolEnabledLLM
         from pyovis.ai.response_utils import parse_json_message
@@ -479,24 +536,24 @@ class SessionManager:
         )
         user_message = f"""현재 날짜/시간: {now_str}
 
-사용자 요청: {payload}
+    사용자 요청: {payload}
 
-이 요청을 직접 처리하라. 실시간 정보(날씨, 환율 등)가 필요하면 fetch 도구를 사용하라.
+    이 요청을 직접 처리하라. 실시간 정보(날씨, 환율 등)가 필요하면 fetch 도구를 사용하라.
 
-다음 JSON 형식으로 응답하라:
-{{
-  "status": "success",
-  "result": "작업 결과 (코드, 답변 등)",
-  "file_path": "저장할 파일 경로 (필요한 경우, 없으면 null)",
-  "message": "사용자에게 전달할 메시지"
-}}
+    다음 JSON 형식으로 응답하라:
+    {{
+      "status": "success",
+      "result": "작업 결과 (코드, 답변 등)",
+      "file_path": "코드/스크립트 파일이 필요한 경우에만 경로 명시 (단순 질문/잡담/안내인 경우 null)",
+      "message": "사용자에게 전달할 메시지"
+    }}
 
-작업 유형별 처리:
-- 날짜/시간/요일 질문: 위 "현재 날짜/시간"을 기준으로 직접 답변 (fetch 불필요)
-- 코드 작성: 완전하고 실행 가능한 코드를 작성
-- 질문 답변: 명확하고 간결한 답변 제공
-- 날씨/실시간 정보: fetch 도구로 open-meteo.com 등 공개 API 직접 호출
-"""
+    작업 유형별 처리:
+    - 날짜/시간/요일 질문: 위 "현재 날짜/시간"을 기준으로 직접 답변 (fetch 불필요)
+    - 코드 작성: 완전하고 실행 가능한 코드를 작성
+    - 질문 답변: 명확하고 간결한 답변 제공
+    - 날씨/실시간 정보: fetch 도구로 open-meteo.com 등 공개 API 직접 호출
+    """
         try:
             response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
         finally:
@@ -517,6 +574,90 @@ class SessionManager:
         result["task_id"] = task_id
         result["path"] = "simple"
         return result
+
+    
+    async def _handle_chat(self, task_id: str, payload: str) -> dict:
+        """Handle chat/conversation - never generates files, just responds."""
+        from pyovis.mcp.tool_adapter import ToolEnabledLLM
+        from pyovis.ai.response_utils import parse_json_message
+        from datetime import datetime, timezone, timedelta
+
+        KST = timezone(timedelta(hours=9))
+        now_str = datetime.now(KST).strftime("%Y 년 %m 월 %d 일 %A %H:%M KST")
+
+        llm = ToolEnabledLLM(
+            swap_manager=self.model_swap,
+            role="brain",
+            tool_adapter=self.tool_adapter,
+            max_tool_iterations=5,
+        )
+        user_message = f"""현재 날짜/시간: {now_str}
+
+    사용자 메시지: {payload}
+
+    이것은 일반적인 대화 또는 인사말이다. **파일을 생성하지 마라**.
+
+    다음 JSON 형식으로 응답하라:
+    {{
+    "status": "success",
+    "result": "친근한 답변",
+    "message": "사용자에게 전달할 메시지"
+    }}
+
+    **중요**: file_path 를 포함하지 마라. 이 요청은 파일 생성이 필요 없다.
+    """
+        try:
+            response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+        finally:
+            await llm.aclose()
+
+        result = parse_json_message(
+            {"content": response},
+            default={"status": "success", "message": response},
+        )
+
+        # Ensure no file_path or workspace is set for chat
+        result.pop("file_path", None)
+        result.pop("workspace", None)  # Chat should not have workspace
+
+        result["task_id"] = task_id
+        result["path"] = "chat"
+        return result
+
+    async def _handle_tool_only(self, task_id: str, payload: str) -> dict:
+        """
+        [v5.3 Fast-Track] 도구 호출만으로 해결 가능한 경우, Brain 이 직접 처리하여 Hands 생략.
+        """
+        from pyovis.mcp.tool_adapter import ToolEnabledLLM
+
+        llm = ToolEnabledLLM(
+            swap_manager=self.model_swap,
+            role="brain",  # Brain 이 직접 도구 사용
+            tool_adapter=self.tool_adapter,
+            max_tool_iterations=5
+        )
+
+        try:
+            # Brain 이 직접 fetch 등을 호출하여 답변 생성
+            response = await llm.call_with_tools(
+                system_prompt="You are a helpful assistant. If the user asks for information (news, weather, search), use the available tools (fetch) to find the answer.",
+                user_message=payload
+            )
+
+            return {
+                "status": "success",
+                "message": response,
+                "path": "fast_track_tool_only"
+            }
+        except Exception as e:
+            logger.error(f"Fast-Track failed: {e}")
+            # 실패시에는 기존 로직으로 fall-through (complex 처리 등)
+            return {
+                "status": "error",
+                "message": str(e),
+                "path": "fast_track_failed"
+            }
+
 
     async def _handle_complex_task(self, task_id: str, payload: str, *, chat_id: str | int | None = None) -> dict:
         """Handle complex task via full loop."""
