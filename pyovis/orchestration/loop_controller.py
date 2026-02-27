@@ -267,21 +267,47 @@ class ResearchLoopController:
             # 5. REVISE / ENRICH 단계: 수정 및 보강
             # ============================================================
             elif ctx.current_step in (LoopStep.REVISE, LoopStep.ENRICH):
-                await self._notify(ctx, f"🔧 수정 중... (루프 {ctx.loop_count})")
+                await self._notify(ctx, f"\U0001f527 수정 중... (루프 {ctx.loop_count})")
                 current_task = ctx.todo_list[ctx.current_task_index]
                 if self._can_self_fix(ctx):
                     skill_context = self.skill_manager.load_verified(
                         ctx.task_description
                     )
+
+                    # Save previous code for rollback
+                    prev_code = ctx.current_code or ""
+
                     ctx.current_code, reasoning = await self.hands.revise(
                         current_task,
-                        ctx.current_code or "",
+                        prev_code,
                         ctx.critic_result,
                         ctx.self_fix_scope,
                         ctx.judge_result,
                         ctx.pass_criteria,
                         skill_context,
                     )
+
+                    # Log S/R metrics if available
+                    sr_metrics = getattr(self.hands, "_last_sr_metrics", None)
+                    if sr_metrics:
+                        ctx.reasoning_log.append(
+                            f"[SR_METRICS] {sr_metrics}"
+                        )
+                        logger.info(f"S/R metrics: {sr_metrics}")
+
+                    # Syntax validation: compile check
+                    if ctx.current_code:
+                        try:
+                            compile(ctx.current_code, "<revise>", "exec")
+                        except SyntaxError as e:
+                            logger.warning(
+                                f"S/R 결과 구문 오류: {e}, 이전 코드로 롤백"
+                            )
+                            ctx.current_code = prev_code
+                            ctx.reasoning_log.append(
+                                f"[REVISE_ROLLBACK] Syntax error after S/R: {e}"
+                            )
+
                     if reasoning:
                         ctx.reasoning_log.append(f"[REVISE] {reasoning}")
                     ctx.current_step = LoopStep.CRITIQUE

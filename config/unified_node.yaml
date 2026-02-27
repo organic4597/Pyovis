@@ -59,9 +59,11 @@ models:
     file: "mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
     path: "/pyovis_memory/models/mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf"
     size_gb: 14
-    ctx_size: 80000           # 80K — validated on RTX 3060+4070S (22.2GB VRAM)
+    ctx_size: 65536           # 64K — 14.3GB weights + 4.88GB KV cache (q8_0) = ~19.2GB VRAM
     n_gpu_layers: 40          # fewer layers due to larger model size
     jinja: true               # Devstral requires --jinja flag
+    cache_type_k: "q8_0"      # 8-bit KV cache (better quality than q4)
+    cache_type_v: "q8_0"
     fallback: "brain"         # fall back to Brain if Hands unavailable
   judge:
     file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"
@@ -96,7 +98,7 @@ model_swap:
     hands:
       system_prompt: "system/hands_prompt.txt"
       temperature: 0.2
-      max_tokens: 8192
+      max_tokens: 4096          # reduced from 8192 (S/R blocks need less output)
       requires_model: "hands"
     judge:
       system_prompt: "system/judge_prompt.txt"

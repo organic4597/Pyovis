@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import TYPE_CHECKING, Optional, Dict, Any
 
@@ -6,6 +7,11 @@ import httpx
 from pyovis.ai.prompts.loaders import load_prompt
 from pyovis.ai.swap_manager import ModelSwapManager
 from pyovis.ai.response_utils import extract_reasoning
+from pyovis.execution.search_replace import (
+    apply_search_replace,
+    format_metrics,
+    ApplyResult,
+)
 from pyovis.memory.experience_db import (
     get_experience_db,
     ExperienceEntry,
@@ -19,6 +25,8 @@ from pyovis.execution.execution_plan import (
 if TYPE_CHECKING:
     from pyovis.mcp.tool_adapter import MCPToolAdapter
 
+logger = logging.getLogger(__name__)
+
 _CODE_FENCE_RE = re.compile(r"^```[\w]*\n?", re.MULTILINE)
 _CODE_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
 
@@ -31,6 +39,7 @@ class Hands:
         experience_db=None,
     ) -> None:
         self.system_prompt = load_prompt("hands_prompt.txt")
+        self.revise_prompt = load_prompt("hands_revise_prompt.txt")
         self.swap = swap_manager
         self.client = httpx.AsyncClient(timeout=600.0)
         self.tool_adapter = tool_adapter
@@ -166,6 +175,11 @@ class Hands:
         pass_criteria: dict | None = None,
         skill_context: str = "",
     ) -> tuple[str, str]:
+        """Revise code using Search/Replace blocks with whole-file fallback.
+
+        Returns:
+            Tuple of (revised_code, reasoning)
+        """
         criteria_list = []
         if pass_criteria:
             task_id = str(task.get("id", 1))
@@ -244,16 +258,54 @@ class Hands:
 1. Fix the above errors
 2. Improve code to meet PASS criteria
 3. Changes outside allowed scope are prohibited
-4. Rewrite the entire code (do not send only modified parts)
+4. Use SEARCH/REPLACE blocks to show only the changed parts
+5. Each SEARCH block must exactly match the original code
 """
-        return await self._call_with_tools(user_message)
+        # Use revise-specific system prompt for S/R format
+        llm_response, reasoning = await self._call_with_tools(
+            user_message, system_prompt=self.revise_prompt
+        )
 
-    async def _call_with_tools(self, user_message: str) -> tuple[str, str]:
+        # Apply S/R blocks to previous code
+        new_code = self._apply_search_replace_with_fallback(
+            prev_code, llm_response
+        )
+
+        return new_code, reasoning
+
+    def _apply_search_replace_with_fallback(
+        self, prev_code: str, llm_response: str
+    ) -> str:
+        """Apply S/R blocks to code. Falls back to whole-file on failure.
+
+        Stores metrics in self._last_sr_metrics for logging by loop_controller.
+        """
+        sr_result = apply_search_replace(prev_code, llm_response)
+        self._last_sr_metrics = format_metrics(sr_result)
+
+        if sr_result.success:
+            logger.info(
+                f"S/R 블록 적용 성공: {sr_result.blocks_applied}개 블록, "
+                f"매칭 방식: {sr_result.match_types}"
+            )
+            return sr_result.new_code
+
+        # Fallback: treat LLM response as whole-file rewrite
+        logger.warning(
+            f"S/R 블록 실패 ({sr_result.fail_reason}), "
+            f"전체 파일 재작성으로 fallback"
+        )
+        self._last_sr_metrics["sr_fallback_triggered"] = True
+
+        # The LLM response IS the full code (fallback behavior)
+        return llm_response
+
+    async def _call_with_tools(self, user_message: str, system_prompt: str | None = None) -> tuple[str, str]:
         """LLM call with tool calling."""
         await self.swap.ensure_model("hands")
 
         messages = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": system_prompt or self.system_prompt},
             {"role": "user", "content": user_message},
         ]
 
