@@ -55,8 +55,12 @@ class Brain:
   "action": "revise_plan | human_escalation",
   "analysis": "분석 내용",
   "new_plan": "수정된 계획 (action이 revise_plan일 때)",
-  "new_todo": [],
-  "new_criteria": {{}}
+  "new_todo": [
+    {{"id": 1, "title": "Task 제목", "description": "상세 설명"}}
+  ],
+  "new_criteria": {{
+    "1": ["조건1", "조건2"]
+  }}
 }}
 """
         response, reasoning = await self._call(user_message)

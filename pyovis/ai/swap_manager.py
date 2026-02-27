@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import time
+import signal
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -256,7 +257,26 @@ class ModelSwapManager:
         logger.info(f"Started llama-server PID={self._process.pid} for {role}")
         self.wait_for_health_sync(role)
 
+    async def _kill_port_occupant(self) -> None:
+        """Kill any process occupying our port (handles stale processes from
+        previous bot restarts where self._process reference was lost)."""
+        try:
+            result = subprocess.run(
+                ["fuser", "-k", "-TERM", f"{self.config.port}/tcp"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                logger.info(f"Killed stale process on port {self.config.port}")
+                await asyncio.sleep(1)  # brief wait for port release
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass  # fuser not available or no process on port
+
+
     async def _stop_server(self):
+        # Kill any process using our port first (handles stale processes from
+        # previous runs or cases where self._process reference was lost)
+        await self._kill_port_occupant()
+
         if self._process is None:
             return
 
@@ -271,7 +291,11 @@ class ModelSwapManager:
             return
 
         logger.info(f"Stopping llama-server PID={self._process.pid}")
-        self._process.terminate()
+        # Kill entire process group (setsid was used at launch)
+        try:
+            os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            self._process.terminate()
 
         for _ in range(self.config.shutdown_timeout):
             if self._process.poll() is not None:
@@ -279,7 +303,10 @@ class ModelSwapManager:
             await asyncio.sleep(1)
         else:
             logger.warning("Force killing llama-server")
-            self._process.kill()
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                self._process.kill()
             self._process.wait()
 
         # Clean up zombie process
@@ -287,31 +314,6 @@ class ModelSwapManager:
             os.waitpid(self._process.pid, os.WNOHANG)
         except (ChildProcessError, OSError):
             pass
-
-        self._process = None
-        self._current_role = None
-
-        # Allow GPU memory to be released
-        await asyncio.sleep(2)
-        if self._process is None:
-            return
-
-        if self._process.poll() is not None:
-            self._process = None
-            self._current_role = None
-            return
-
-        logger.info(f"Stopping llama-server PID={self._process.pid}")
-        self._process.terminate()
-
-        for _ in range(self.config.shutdown_timeout):
-            if self._process.poll() is not None:
-                break
-            await asyncio.sleep(1)
-        else:
-            logger.warning("Force killing llama-server")
-            self._process.kill()
-            self._process.wait()
 
         self._process = None
         self._current_role = None

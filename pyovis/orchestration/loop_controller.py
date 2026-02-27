@@ -209,6 +209,28 @@ class ResearchLoopController:
                     "execution_time": result.execution_time,
                     "error_type": result.error_type,
                 }
+                # 실행 결과를 텔레그램에 전송
+                status_icon = "✅" if result.exit_code == 0 else "❌"
+                parts = [
+                    f"{status_icon} 실행 완료 (exit={result.exit_code}, {result.execution_time:.1f}s)",
+                ]
+                if result.stdout and result.stdout.strip():
+                    parts.append(f"📤 stdout:\n```\n{result.stdout.strip()}\n```")
+                if result.stderr and result.stderr.strip():
+                    parts.append(f"⚠️ stderr:\n```\n{result.stderr.strip()}\n```")
+                if not result.stdout and not result.stderr:
+                    parts.append("_(출력 없음)_")
+                full_msg = "\n".join(parts)
+                # Telegram 메시지 한 건 최대 4096자 — 초과 시 분할 전송
+                if len(full_msg) <= 4000:
+                    await self._notify(ctx, full_msg)
+                else:
+                    await self._notify(ctx, parts[0])
+                    for part in parts[1:]:
+                        chunk = part
+                        while chunk:
+                            await self._notify(ctx, chunk[:4000])
+                            chunk = chunk[4000:]
                 ctx.current_step = LoopStep.EVALUATE
 
             # ============================================================
@@ -330,7 +352,12 @@ class ResearchLoopController:
                 logger.info(f"[DEBUG] escalation_result.get('action') = {escalation_result.get('action')}")
                 if escalation_result.get("action") == "revise_plan":
                     ctx.plan = escalation_result["new_plan"]
-                    ctx.todo_list = escalation_result["new_todo"]
+                    raw_todo = escalation_result["new_todo"] or []
+                    ctx.todo_list = [
+                        t if isinstance(t, dict)
+                        else {"id": i + 1, "title": str(t), "description": str(t)}
+                        for i, t in enumerate(raw_todo)
+                    ]
                     ctx.pass_criteria = escalation_result["new_criteria"]
                     ctx.consecutive_fails = 0
                     ctx.current_task_index = 0  # Reset index for new todo_list
