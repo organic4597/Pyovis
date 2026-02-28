@@ -513,6 +513,15 @@ class TelegramBot:
                 text += f"\n\n📁 Workspace: `{result['workspace']}`"
             if result.get("files"):
                 text += f"\n\n📄 Files:\n" + "\n".join(f" • `{f}`" for f in result["files"][:10])
+
+        elif status == "complete":
+            text = f"✅ *완료*\n\n{result.get('review', result.get('message', '작업이 완료되었습니다.'))}"
+            if result.get("workspace_root"):
+                text += f"\n\n📁 저장 위치: `{result['workspace_root']}`"
+            created_files = result.get("created_files", [])
+            if created_files:
+                paths = [f.get("saved_path") or f.get("file_path", "?") for f in created_files[:10]]
+                text += "\n\n📄 *생성된 파일:*\n" + "\n".join(f" • `{p}`" for p in paths)
         
         elif status == "complex":
             text = f"🔄 *복잡한 작업*\n\n{result.get('message', 'Processing...')}"
@@ -533,7 +542,7 @@ class TelegramBot:
             
             # 생성된 파일 (있으면)
             if result.get("created_files"):
-                files = [f.get("file_path", f.get("saved_path", "?")) for f in result["created_files"][:3]]
+                files = [f.get("saved_path") or f.get("file_path", "?") for f in result["created_files"][:3]]
                 text += "\n\n📄 *생성된 파일:*\n" + "\n".join(f"• `{f}`" for f in files)
             
             # 프로젝트 경로
