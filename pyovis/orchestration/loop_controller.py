@@ -59,7 +59,7 @@ class LoopContext:
     workspace: Optional["WorkspaceManager"] = None
     progress_callback: Optional[Callable[[str], Awaitable[None]]] = None
     reasoning_log: list[str] = field(default_factory=list)
-
+    setup_commands: list[str] = field(default_factory=list)  # Hands가 반환한 pip install 명령
 
 class ResearchLoopController:
     def __init__(
@@ -162,7 +162,13 @@ class ResearchLoopController:
                         # 결과 언패킹 (2-tuple 또는 3-tuple 모두 처리)
                         part_code = result[0] if len(result) > 0 else None
                         reasoning = result[1] if len(result) > 1 else None
+                        exec_plan_dict = result[2] if len(result) > 2 else {}
 
+                        # setup_commands 누적 (중복 제거)
+                        if exec_plan_dict:
+                            for cmd in exec_plan_dict.get("setup_commands", []):
+                                if cmd not in ctx.setup_commands:
+                                    ctx.setup_commands.append(cmd)
                         # Reasoning 기록
                         if reasoning:
                             ctx.reasoning_log.append(f"[BUILD-{idx}] {reasoning}")
@@ -202,7 +208,7 @@ class ResearchLoopController:
                 await self._notify(ctx, "🧪 실행 테스트 중...")
                 if ctx.current_code is None:
                     raise RuntimeError("No code to execute in critique step")
-                result = await self.critic.execute(ctx.current_code, allow_network=True)
+                result = await self.critic.execute(ctx.current_code, allow_network=True, setup_commands=ctx.setup_commands or None)
                 ctx.critic_result = {
                     "stdout": result.stdout,
                     "stderr": result.stderr,

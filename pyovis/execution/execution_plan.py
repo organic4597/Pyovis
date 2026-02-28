@@ -136,8 +136,11 @@ class ExecutionPlan:
 
 
 def create_execution_plan_from_task(
-    task: Dict[str, Any], code: str, pass_criteria: Dict[str, Any]
-) -> ExecutionPlan:
+    task: Dict[str, Any],
+    code: str,
+    pass_criteria: Dict[str, Any],
+    pip_packages: Optional[List[str]] = None,
+) -> "ExecutionPlan":
     """
     Create an ExecutionPlan from task information.
     This is a helper that Hands can use to generate execution plans.
@@ -185,17 +188,47 @@ def create_execution_plan_from_task(
                 )
             )
 
-    # Detect requirements from imports
-    setup_commands = []
-    if "import requests" in code or "from requests" in code:
-        setup_commands.append("pip install requests")
-    if "import numpy" in code or "from numpy" in code:
-        setup_commands.append("pip install numpy")
-    if "import pandas" in code or "from pandas" in code:
-        setup_commands.append("pip install pandas")
-    if "import fastapi" in code or "from fastapi" in code:
-        setup_commands.append("pip install fastapi uvicorn")
+    # import명 → 실제 pip 패키지명 매핑 테이블
+    _IMPORT_TO_PIP: Dict[str, str] = {
+        "OpenGL": "PyOpenGL",
+        "cv2": "opencv-python-headless",
+        "PIL": "Pillow",
+        "sklearn": "scikit-learn",
+        "yaml": "PyYAML",
+        "Crypto": "pycryptodome",
+        "bs4": "beautifulsoup4",
+        "serial": "pyserial",
+        "dotenv": "python-dotenv",
+        "googleapiclient": "google-api-python-client",
+        "jwt": "PyJWT",
+        "telegram": "python-telegram-bot",
+        "dateutil": "python-dateutil",
+        "magic": "python-magic",
+        "psycopg2": "psycopg2-binary",
+        "fitz": "PyMuPDF",
+        "attr": "attrs",
+    }
 
+    # pip_packages가 Hands에서 전달된 경우 우선 사용
+    if pip_packages:
+        setup_commands = [f"pip install {pkg}" for pkg in pip_packages]
+    else:
+        # Fallback: import 구문 기반 감지 (import명 → pip명 매핑 적용)
+        setup_commands = []
+        if "import requests" in code or "from requests" in code:
+            setup_commands.append("pip install requests")
+        if "import numpy" in code or "from numpy" in code:
+            setup_commands.append("pip install numpy")
+        if "import pandas" in code or "from pandas" in code:
+            setup_commands.append("pip install pandas")
+        if "import fastapi" in code or "from fastapi" in code:
+            setup_commands.append("pip install fastapi uvicorn")
+        # import명 → pip 매핑 테이블에 있는 모듈들 삤캐
+        for import_name, pip_name in _IMPORT_TO_PIP.items():
+            pattern1 = f"import {import_name}"
+            pattern2 = f"from {import_name}"
+            if pattern1 in code or pattern2 in code:
+                setup_commands.append(f"pip install {pip_name}")
     # Detect expected files
     expected_files = []
     import re

@@ -1,6 +1,7 @@
 import logging
+import json
 import re
-from typing import TYPE_CHECKING, Optional, Dict, Any
+from typing import TYPE_CHECKING, Optional, Dict, Any, List
 
 import httpx
 
@@ -29,8 +30,26 @@ logger = logging.getLogger(__name__)
 
 _CODE_FENCE_RE = re.compile(r"^```[\w]*\n?", re.MULTILINE)
 _CODE_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
+_PIP_PACKAGES_RE = re.compile(r"```json\s*(\{[^`]*?\"pip_packages\"[^`]*?\})\s*```", re.DOTALL)
 
 
+def _extract_pip_packages(response: str) -> List[str]:
+    """LLM 응답에서 pip_packages JSON 블록을 요드합니다."""
+    match = _PIP_PACKAGES_RE.search(response)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            pkgs = data.get("pip_packages", [])
+            if isinstance(pkgs, list):
+                return [p for p in pkgs if isinstance(p, str) and p.strip()]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return []
+
+
+def _strip_pip_packages_block(response: str) -> str:
+    """LLM 응답에서 pip_packages JSON 블록을 제거합니다."""
+    return _PIP_PACKAGES_RE.sub("", response).rstrip()
 class Hands:
     def __init__(
         self,
@@ -149,7 +168,11 @@ class Hands:
 3. Write complete, executable code
 4. Include all necessary import statements
 """
-        code, reasoning = await self._call_with_tools(user_message)
+        raw_response, reasoning = await self._call_with_tools(user_message)
+
+        # pip_packages JSON 블록 파싱 후 코드 부분에서 제거
+        pip_packages = _extract_pip_packages(raw_response)
+        code = _strip_pip_packages_block(raw_response)
 
         # Create execution plan from generated code
         task_dict = {
@@ -161,6 +184,7 @@ class Hands:
             task=task_dict,
             code=code,
             pass_criteria=pass_criteria or {},
+            pip_packages=pip_packages,
         )
 
         return code, reasoning, execution_plan.to_dict()

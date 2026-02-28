@@ -44,6 +44,32 @@ class CriticRunner:
         "numpy", "pillow", "PIL", "matplotlib", "pandas",
         "scipy", "pygame", "pytest", "colorama", "click", "rich",
     }
+    # Headless Linux 환경에서 실행 불가한 패키지 (디스플레이 필수)
+    _HEADLESS_INCOMPATIBLE: Set[str] = {
+        "vpython", "OpenGL", "PyOpenGL", "wx", "wxPython",
+        "tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6",
+        "kivy", "pyglet",
+    }
+    # import명 → 실제 pip 패키지명 매핑
+    _IMPORT_TO_PIP: Dict[str, str] = {
+        "OpenGL": "PyOpenGL",
+        "cv2": "opencv-python-headless",
+        "PIL": "Pillow",
+        "sklearn": "scikit-learn",
+        "yaml": "PyYAML",
+        "Crypto": "pycryptodome",
+        "bs4": "beautifulsoup4",
+        "serial": "pyserial",
+        "dotenv": "python-dotenv",
+        "googleapiclient": "google-api-python-client",
+        "jwt": "PyJWT",
+        "telegram": "python-telegram-bot",
+        "dateutil": "python-dateutil",
+        "magic": "python-magic",
+        "psycopg2": "psycopg2-binary",
+        "fitz": "PyMuPDF",
+        "attr": "attrs",
+    }
     # Python 표준 라이브러리 최상위 모듈 (설치 불필요)
     _STDLIB: Set[str] = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else {
         "os", "sys", "re", "io", "abc", "ast", "json", "math", "time",
@@ -88,6 +114,34 @@ class CriticRunner:
             and not pkg.startswith("_")
         ]
         return third_party
+    def _cmds_to_pkg_names(self, setup_commands: list[str]) -> list[str]:
+        """setup_commands (\'pip install X\' 형식) 리스트에서 패키지명만 추출합니다."""
+        result: list[str] = []
+        for cmd in setup_commands:
+            # \'pip install pkg1 pkg2\' 형식 또는 \'pkg1 pkg2\' 등 다양한 형태 지원
+            stripped = cmd.strip()
+            if stripped.startswith("pip install "):
+                stripped = stripped[len("pip install "):].strip()
+            parts = stripped.split()
+            result.extend(p for p in parts if p and not p.startswith("-"))
+        return result
+
+    def _check_headless_incompatible(
+        self, source: str, setup_commands: list[str] | None
+    ) -> str | None:
+        """headless 환경에서 실행 불가한 패키지가 사용되면 해당 패키지명을 반환합니다."""
+        # setup_commands에서 감지
+        if setup_commands:
+            pkg_names = self._cmds_to_pkg_names(setup_commands)
+            for pkg in pkg_names:
+                if pkg in self._HEADLESS_INCOMPATIBLE:
+                    return pkg
+        # import 소스에서도 감지
+        for pkg in self._HEADLESS_INCOMPATIBLE:
+            if f"import {pkg}" in source or f"from {pkg}" in source:
+                return pkg
+        return None
+
 
     def _install_dependencies_sync(self, packages: list[str], timeout: int = 60) -> None:
         """sandbox 콘테이너 안에서 pip install을 실행합니다."""
@@ -127,7 +181,11 @@ class CriticRunner:
                     pass
 
     def _execute_sync(
-        self, code: str | dict[str, str], timeout: int = 30, allow_network: bool = False
+        self,
+        code: str | dict[str, str],
+        timeout: int = 30,
+        allow_network: bool = False,
+        setup_commands: list[str] | None = None,
     ) -> ExecutionResult:
         """Synchronous Docker execution — called via run_in_executor.
 
@@ -144,14 +202,35 @@ class CriticRunner:
             local_modules: set[str] = {
                 os.path.splitext(os.path.basename(fp))[0] for fp in files
             }
-            # 전체 소스에서 외부 패키지 추출 (로컬 모듈 제외)
+            # 전체 소스에서 외부 패키지 추출 (로컈 모듈 제외)
             all_source = "\n".join(files.values())
-            third_party = [
-                pkg for pkg in self._extract_third_party_imports(all_source)
-                if pkg not in local_modules
-            ]
-            if third_party:
-                self._install_dependencies_sync(third_party)
+            # Headless 불가 패키지 사전 감지
+            headless_conflict = self._check_headless_incompatible(all_source, setup_commands)
+            if headless_conflict:
+                return ExecutionResult(
+                    stdout="",
+                    stderr=f"requires_display: {headless_conflict} 패키지는 headless 환경에서 실행 불가합니다. headless 호환 대안을 사용하세요 (예: pygame, matplotlib, pillow).",
+                    exit_code=1,
+                    execution_time=0.0,
+                    error_type="missing_import",
+                )
+
+            # setup_commands 우선 사용, 없으면 AST fallback
+            if setup_commands:
+                pkg_names = self._cmds_to_pkg_names(setup_commands)
+                if pkg_names:
+                    self._install_dependencies_sync(pkg_names)
+            else:
+                local_modules: set[str] = {
+                    os.path.splitext(os.path.basename(fp))[0] for fp in files
+                }
+                third_party = [
+                    pkg for pkg in self._extract_third_party_imports(all_source)
+                    if pkg not in local_modules
+                ]
+                mapped = [self._IMPORT_TO_PIP.get(p, p) for p in third_party]
+                if mapped:
+                    self._install_dependencies_sync(mapped)
 
             # 각 파일을 SANDBOX_PATH에 저장
             for fp, src in files.items():
@@ -170,9 +249,27 @@ class CriticRunner:
             run_cmd = f"python /workspace/{entry_name}"
         else:
             # ── 다단일 파일 모드 ──────────────────────────────────────
-            third_party = self._extract_third_party_imports(code)
-            if third_party:
-                self._install_dependencies_sync(third_party)
+            # Headless 불가 패키지 사전 감지
+            headless_conflict = self._check_headless_incompatible(code, setup_commands)
+            if headless_conflict:
+                return ExecutionResult(
+                    stdout="",
+                    stderr=f"requires_display: {headless_conflict} 패키지는 headless 환경에서 실행 불가합니다. headless 호환 대안을 사용하세요 (예: pygame, matplotlib, pillow).",
+                    exit_code=1,
+                    execution_time=0.0,
+                    error_type="missing_import",
+                )
+
+            # setup_commands 우선 사용, 없으면 AST fallback
+            if setup_commands:
+                pkg_names = self._cmds_to_pkg_names(setup_commands)
+                if pkg_names:
+                    self._install_dependencies_sync(pkg_names)
+            else:
+                third_party = self._extract_third_party_imports(code)
+                mapped = [self._IMPORT_TO_PIP.get(p, p) for p in third_party]
+                if mapped:
+                    self._install_dependencies_sync(mapped)
 
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
@@ -250,13 +347,19 @@ class CriticRunner:
                     pass
 
     async def execute(
-        self, code: str | dict[str, str], timeout: int = 30, allow_network: bool = False
+        self,
+        code: str | dict[str, str],
+        timeout: int = 30,
+        allow_network: bool = False,
+        setup_commands: list[str] | None = None,
     ) -> ExecutionResult:
         """Execute code in Docker sandbox without blocking the event loop."""
+        import functools
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, self._execute_sync, code, timeout, allow_network
+        fn = functools.partial(
+            self._execute_sync, code, timeout, allow_network, setup_commands
         )
+        return await loop.run_in_executor(None, fn)
 
     async def execute_with_plan(
         self,
