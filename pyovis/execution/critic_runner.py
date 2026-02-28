@@ -57,12 +57,7 @@ class CriticRunner:
         "requests", "pydantic", "fastapi", "httpx",
         "numpy", "pillow", "PIL", "matplotlib", "pandas",
         "scipy", "pygame", "pytest", "colorama", "click", "rich",
-    }
-    # Headless Linux 환경에서 실행 불가한 패키지 (디스플레이 필수)
-    _HEADLESS_INCOMPATIBLE: Set[str] = {
-        "vpython", "OpenGL", "PyOpenGL", "wx", "wxPython",
-        "tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6",
-        "kivy", "pyglet",
+        "OpenGL", "PyOpenGL",
     }
     # import명 → 실제 pip 패키지명 매핑
     _IMPORT_TO_PIP: Dict[str, str] = {
@@ -140,22 +135,6 @@ class CriticRunner:
             result.extend(p for p in parts if p and not p.startswith("-"))
         return result
 
-    def _check_headless_incompatible(
-        self, source: str, setup_commands: list[str] | None
-    ) -> str | None:
-        """headless 환경에서 실행 불가한 패키지가 사용되면 해당 패키지명을 반환합니다."""
-        # setup_commands에서 감지
-        if setup_commands:
-            pkg_names = self._cmds_to_pkg_names(setup_commands)
-            for pkg in pkg_names:
-                if pkg in self._HEADLESS_INCOMPATIBLE:
-                    return pkg
-        # import 소스에서도 감지
-        for pkg in self._HEADLESS_INCOMPATIBLE:
-            if f"import {pkg}" in source or f"from {pkg}" in source:
-                return pkg
-        return None
-
 
     def _install_dependencies_sync(self, packages: list[str], timeout: int = 60) -> None:
         """sandbox 콘테이너 안에서 pip install을 실행합니다."""
@@ -216,18 +195,8 @@ class CriticRunner:
             local_modules: set[str] = {
                 os.path.splitext(os.path.basename(fp))[0] for fp in files
             }
-            # 전체 소스에서 외부 패키지 추출 (로컈 모듈 제외)
+            # 전체 소스에서 외부 패키지 추출 (로컬 모듈 제외)
             all_source = "\n".join(files.values())
-            # Headless 불가 패키지 사전 감지
-            headless_conflict = self._check_headless_incompatible(all_source, setup_commands)
-            if headless_conflict:
-                return ExecutionResult(
-                    stdout="",
-                    stderr=f"requires_display: {headless_conflict} 패키지는 headless 환경에서 실행 불가합니다. headless 호환 대안을 사용하세요 (예: pygame, matplotlib, pillow).",
-                    exit_code=1,
-                    execution_time=0.0,
-                    error_type="missing_import",
-                )
 
             # setup_commands 우선 사용, 없으면 AST fallback
             if setup_commands:
@@ -260,19 +229,9 @@ class CriticRunner:
                 (os.path.basename(fp) for fp in files if os.path.basename(fp) == "main.py"),
                 os.path.basename(list(files.keys())[0]),
             )
-            run_cmd = f"python /workspace/{entry_name}"
+            run_cmd = f"bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & sleep 0.5 && DISPLAY=:99 python /workspace/{entry_name}'"
         else:
-            # ── 다단일 파일 모드 ──────────────────────────────────────
-            # Headless 불가 패키지 사전 감지
-            headless_conflict = self._check_headless_incompatible(code, setup_commands)
-            if headless_conflict:
-                return ExecutionResult(
-                    stdout="",
-                    stderr=f"requires_display: {headless_conflict} 패키지는 headless 환경에서 실행 불가합니다. headless 호환 대안을 사용하세요 (예: pygame, matplotlib, pillow).",
-                    exit_code=1,
-                    execution_time=0.0,
-                    error_type="missing_import",
-                )
+            # ── 단일 파일 모드 ──────────────────────────────────────
 
             # setup_commands 우선 사용, 없으면 AST fallback
             if setup_commands:
@@ -291,7 +250,7 @@ class CriticRunner:
                 f.write(code)
                 temp_file = f.name
             os.chmod(temp_file, 0o644)
-            run_cmd = f"python /workspace/{os.path.basename(temp_file)}"
+            run_cmd = f"bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & sleep 0.5 && DISPLAY=:99 python /workspace/{os.path.basename(temp_file)}'"
 
         container = None
         start_time = time.time()
@@ -306,10 +265,6 @@ class CriticRunner:
                 detach=True,
                 environment={
                     "PYTHONUNBUFFERED": "1",
-                    # headless 환경에서 pygame/SDL 동작 허용 (dummy 디스플레이)
-                    "SDL_VIDEODRIVER": "dummy",
-                    "SDL_AUDIODRIVER": "dummy",
-                    "DISPLAY": "",
                 },
                 remove=False,
                 stdout=True,
