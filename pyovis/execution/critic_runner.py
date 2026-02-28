@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import time
+import shlex
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Set
 
@@ -229,7 +230,7 @@ class CriticRunner:
                 (os.path.basename(fp) for fp in files if os.path.basename(fp) == "main.py"),
                 os.path.basename(list(files.keys())[0]),
             )
-            run_cmd = f"bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & sleep 0.5 && DISPLAY=:99 python /workspace/{entry_name}'"
+            run_cmd = "bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & until [ -e /tmp/.X99-lock ]; do sleep 0.05; done && DISPLAY=:99 python /workspace/" + shlex.quote(entry_name) + "'"
         else:
             # ── 단일 파일 모드 ──────────────────────────────────────
 
@@ -250,7 +251,7 @@ class CriticRunner:
                 f.write(code)
                 temp_file = f.name
             os.chmod(temp_file, 0o644)
-            run_cmd = f"bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & sleep 0.5 && DISPLAY=:99 python /workspace/{os.path.basename(temp_file)}'"
+            run_cmd = "bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & until [ -e /tmp/.X99-lock ]; do sleep 0.05; done && DISPLAY=:99 python /workspace/" + shlex.quote(os.path.basename(temp_file)) + "'"
 
         container = None
         start_time = time.time()
