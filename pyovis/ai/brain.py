@@ -49,6 +49,18 @@ class Brain:
 루프 횟수: {ctx.loop_count}
 마지막 에러: {ctx.critic_result.get('stderr', '')}
 
+판단 기준:
+- revise_plan 선택 조건 (코드/계획 수정으로 해결 가능):
+  * plan_error: 잘못된 접근 방식, 아키텍처 오류, 파일 구조 문제
+  * implementation_error: 로직 오류, 잘못된 알고리즘
+  * environment_error 중 revise_plan 가능:
+    - 외부 패키지 설치 실패 → 표준 라이브러리나 다른 방법으로 동일 기능 구현
+    - 특정 라이브러리에 의존하는 구현 → 의존성 없이 재구현
+- human_escalation 선택 조건 (코드 수정만으로 해결 불가):
+  * 하드웨어/OS 제약 (GPU 없음, 파일시스템 권한 등)
+  * 외부 API 키/인증 필요
+  * 요구사항 자체가 불명확하거나 모순됨
+
 원인을 분류하고 다음 형식으로 응답:
 {{
   "cause_type": "plan_error | implementation_error | environment_error",

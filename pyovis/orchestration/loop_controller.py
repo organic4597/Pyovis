@@ -201,7 +201,7 @@ class ResearchLoopController:
                 await self._notify(ctx, "🧪 실행 테스트 중...")
                 if ctx.current_code is None:
                     raise RuntimeError("No code to execute in critique step")
-                result = await self.critic.execute(ctx.current_code)
+                result = await self.critic.execute(ctx.current_code, allow_network=True)
                 ctx.critic_result = {
                     "stdout": result.stdout,
                     "stderr": result.stderr,

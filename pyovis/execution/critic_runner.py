@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import ast
 import asyncio
+import logging
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 
 import importlib
 
 from pyovis.execution.execution_plan import ExecutionPlan, ExecutionType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,16 +38,103 @@ class CriticRunner:
         "value_error": "ValueError",
         "attribute_error": "AttributeError",
     }
+    # Dockerfile에 이미 설치된 패키지 (설치 불필요)
+    _PREINSTALLED: Set[str] = {
+        "requests", "pydantic", "fastapi", "httpx",
+        "numpy", "pillow", "PIL", "matplotlib", "pandas",
+        "scipy", "pygame", "pytest", "colorama", "click", "rich",
+    }
+    # Python 표준 라이브러리 최상위 모듈 (설치 불필요)
+    _STDLIB: Set[str] = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else {
+        "os", "sys", "re", "io", "abc", "ast", "json", "math", "time",
+        "random", "string", "struct", "socket", "threading", "subprocess",
+        "pathlib", "functools", "itertools", "collections", "contextlib",
+        "dataclasses", "enum", "copy", "typing", "types", "weakref",
+        "hashlib", "hmac", "base64", "uuid", "datetime", "calendar",
+        "logging", "warnings", "traceback", "inspect", "importlib",
+        "unittest", "tempfile", "shutil", "glob", "fnmatch", "stat",
+        "csv", "configparser", "argparse", "textwrap", "html", "http",
+        "urllib", "email", "xml", "zipfile", "tarfile", "gzip",
+        "queue", "heapq", "bisect", "array", "mmap", "signal",
+        "ctypes", "platform", "gc", "dis", "code", "codeop",
+        "builtins", "__future__",
+    }
 
     def __init__(self) -> None:
         docker = importlib.import_module("docker")
         self.client = docker.from_env()
         os.makedirs(self.SANDBOX_PATH, exist_ok=True)
 
+    def _extract_third_party_imports(self, code: str) -> list[str]:
+        """AST로 코드에서 import된 외부 패키지 목록을 추출합니다."""
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        top_level: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_level.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    top_level.add(node.module.split(".")[0])
+
+        # 표준 라이브러리 + 이미 설치된 패키지 제외
+        third_party = [
+            pkg for pkg in sorted(top_level)
+            if pkg not in self._STDLIB and pkg not in self._PREINSTALLED
+            and not pkg.startswith("_")
+        ]
+        return third_party
+
+    def _install_dependencies_sync(self, packages: list[str], timeout: int = 60) -> None:
+        """sandbox 콘테이너 안에서 pip install을 실행합니다."""
+        if not packages:
+            return
+        pkg_list = " ".join(packages)
+        cmd = f"pip install --quiet {pkg_list}"
+        logger.info(f"프리세인스톨 패키지 설치 시작: {packages}")
+        container = None
+        try:
+            container = self.client.containers.run(
+                "pyvis-sandbox:latest",
+                cmd,
+                volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
+                network_mode="bridge",  # pip install은 네트워크 필요
+                mem_limit="512m",
+                detach=True,
+                remove=False,
+                stdout=True,
+                stderr=True,
+            )
+            status = container.wait(timeout=timeout)
+            exit_code = status.get("StatusCode", 0) if isinstance(status, dict) else 0
+            if exit_code != 0:
+                stderr_bytes = container.logs(stdout=False, stderr=True)
+                stderr_text = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
+                logger.warning(f"패키지 설치 실패 (exit={exit_code}): {stderr_text[:300]}")
+            else:
+                logger.info(f"패키지 설치 완료: {packages}")
+        except Exception as e:
+            logger.warning(f"패키지 설치 중 예외: {e}")
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
+
     def _execute_sync(
         self, code: str, timeout: int = 30, allow_network: bool = False
     ) -> ExecutionResult:
         """Synchronous Docker execution — called via run_in_executor."""
+        # 코드에서 외부 패키지를 추출하여 설치 선행
+        third_party = self._extract_third_party_imports(code)
+        if third_party:
+            self._install_dependencies_sync(third_party)
+
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
         ) as f:

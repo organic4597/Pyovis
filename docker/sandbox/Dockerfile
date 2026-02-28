@@ -4,7 +4,17 @@ RUN pip install --no-cache-dir \
     requests \
     pydantic \
     fastapi \
-    httpx
+    httpx \
+    numpy \
+    pillow \
+    matplotlib \
+    pandas \
+    scipy \
+    pygame \
+    pytest \
+    colorama \
+    click \
+    rich
 
 RUN useradd -m -u 1000 sandbox
 WORKDIR /workspace

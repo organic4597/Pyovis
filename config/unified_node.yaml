@@ -135,7 +135,7 @@ sandbox:
   tmpfs_path: "/dev/shm/pyovis_sandbox"
   memory_limit: "512m"
   cpu_limit: 1.0
-  network_enabled: false
+  network_enabled: true
 
 logging:
   level: "INFO"
