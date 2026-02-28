@@ -127,27 +127,67 @@ class CriticRunner:
                     pass
 
     def _execute_sync(
-        self, code: str, timeout: int = 30, allow_network: bool = False
+        self, code: str | dict[str, str], timeout: int = 30, allow_network: bool = False
     ) -> ExecutionResult:
-        """Synchronous Docker execution — called via run_in_executor."""
-        # 코드에서 외부 패키지를 추출하여 설치 선행
-        third_party = self._extract_third_party_imports(code)
-        if third_party:
-            self._install_dependencies_sync(third_party)
+        """Synchronous Docker execution — called via run_in_executor.
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
-        ) as f:
-            f.write(code)
-            temp_file = f.name
-        os.chmod(temp_file, 0o644)
+        code가 dict인 경우 다중 파일 모드: {file_path: source_code}
+        code가 str인 경우 다단일 파일 모드.
+        """
+        written_files: list[str] = []
+        temp_file: str | None = None
+
+        if isinstance(code, dict):
+            # ── 다중 파일 모드 ──────────────────────────────────────
+            files = code
+            # 로컬 모듈 이름 = dict 키에서 .py 제거
+            local_modules: set[str] = {
+                os.path.splitext(os.path.basename(fp))[0] for fp in files
+            }
+            # 전체 소스에서 외부 패키지 추출 (로컬 모듈 제외)
+            all_source = "\n".join(files.values())
+            third_party = [
+                pkg for pkg in self._extract_third_party_imports(all_source)
+                if pkg not in local_modules
+            ]
+            if third_party:
+                self._install_dependencies_sync(third_party)
+
+            # 각 파일을 SANDBOX_PATH에 저장
+            for fp, src in files.items():
+                fname = os.path.basename(fp)
+                dest = os.path.join(self.SANDBOX_PATH, fname)
+                with open(dest, "w") as fh:
+                    fh.write(src)
+                os.chmod(dest, 0o644)
+                written_files.append(dest)
+
+            # 진입점 결정: main.py > 첫 번째 파일
+            entry_name = next(
+                (os.path.basename(fp) for fp in files if os.path.basename(fp) == "main.py"),
+                os.path.basename(list(files.keys())[0]),
+            )
+            run_cmd = f"python /workspace/{entry_name}"
+        else:
+            # ── 다단일 파일 모드 ──────────────────────────────────────
+            third_party = self._extract_third_party_imports(code)
+            if third_party:
+                self._install_dependencies_sync(third_party)
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
+            ) as f:
+                f.write(code)
+                temp_file = f.name
+            os.chmod(temp_file, 0o644)
+            run_cmd = f"python /workspace/{os.path.basename(temp_file)}"
 
         container = None
         start_time = time.time()
         try:
             container = self.client.containers.run(
                 "pyvis-sandbox:latest",
-                f"python /workspace/{os.path.basename(temp_file)}",
+                run_cmd,
                 volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
                 network_mode="none" if not allow_network else "bridge",
                 mem_limit="512m",
@@ -198,11 +238,19 @@ class CriticRunner:
                     container.remove(force=True)
                 except Exception:
                     pass
-            if os.path.exists(temp_file):
+            # 다단일 파일 모드: 임시 파일 삭제
+            if temp_file and os.path.exists(temp_file):
                 os.unlink(temp_file)
+            # 다중 파일 모드: sandbox에 복사한 파일들 삭제
+            for wf in written_files:
+                try:
+                    if os.path.exists(wf):
+                        os.unlink(wf)
+                except Exception:
+                    pass
 
     async def execute(
-        self, code: str, timeout: int = 30, allow_network: bool = False
+        self, code: str | dict[str, str], timeout: int = 30, allow_network: bool = False
     ) -> ExecutionResult:
         """Execute code in Docker sandbox without blocking the event loop."""
         loop = asyncio.get_event_loop()

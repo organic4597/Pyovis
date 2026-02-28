@@ -50,7 +50,7 @@ class LoopContext:
     fail_reasons: list[str] = field(default_factory=list)
     current_step: LoopStep = LoopStep.PLAN
     score: int = 0
-    current_code: str | None = None
+    current_code: str | dict[str, str] | None = None
     critic_result: dict = field(default_factory=dict)
     judge_result: dict = field(default_factory=dict)
     project_id: str | None = None
@@ -139,7 +139,7 @@ class ResearchLoopController:
                 skill_context = self.skill_manager.load_verified(ctx.task_description)
                 logger.info(f"[DEBUG] skill_context 로드 완료: {len(skill_context)} bytes")
 
-                full_code_parts = []
+                full_code_files: dict[str, str] = {}  # {file_path: code}
                 all_success = True
 
                 logger.info(f"[DEBUG] For 루프 시작 전")
@@ -167,10 +167,11 @@ class ResearchLoopController:
                         if reasoning:
                             ctx.reasoning_log.append(f"[BUILD-{idx}] {reasoning}")
 
-                        # 코드 조각 축적
+                        # 코드 조각 축적 — file_path 기준으로 저장
                         if part_code:
-                            full_code_parts.append(part_code)
-                            logger.info(f"✅ {idx}/{total} 단계 코드 생성 완료")
+                            fp = task.get("file_path", "output.py") if isinstance(task, dict) else "output.py"
+                            full_code_files[fp] = part_code
+                            logger.info(f"✅ {idx}/{total} 단계 코드 생성 완료 ({fp})")
                         else:
                             logger.warning(
                                 f"⚠️ {idx}/{total} 단계에서 코드가 생성되지 않았습니다."
@@ -182,10 +183,10 @@ class ResearchLoopController:
                         all_success = False
                         # 에러가 나도 나머지 작업을 계속 진행
 
-                # [중요] 모든 루프가 끝난 후 코드 병합
-                if full_code_parts:
-                    ctx.current_code = "\n\n".join(full_code_parts)
-                    logger.info(f"✅ 전체 코드 병합 완료 ({len(full_code_parts)} 단계)")
+                # [중요] 모든 루프가 끝난 후 — 파일 목록을 ctx에 저장
+                if full_code_files:
+                    ctx.current_code = full_code_files  # dict {file_path: code}
+                    logger.info(f"✅ 전체 코드 생성 완료 ({len(full_code_files)} 파일): {list(full_code_files.keys())}")
                 else:
                     ctx.current_code = None
                     logger.error("❌ 생성된 코드가 없습니다.")
@@ -317,8 +318,8 @@ class ResearchLoopController:
                         )
                         logger.info(f"S/R metrics: {sr_metrics}")
 
-                    # Syntax validation: compile check
-                    if ctx.current_code:
+                    # Syntax validation: compile check (str인 경우에만)
+                    if ctx.current_code and isinstance(ctx.current_code, str):
                         try:
                             compile(ctx.current_code, "<revise>", "exec")
                         except SyntaxError as e:
@@ -394,18 +395,30 @@ class ResearchLoopController:
         if not self.file_writer or not ctx.current_code:
             return
 
-        current_task = ctx.todo_list[ctx.current_task_index]
-        file_path = current_task.get("file_path", f"output_{ctx.current_task_index}.py")
-
-        result = self.file_writer.save_code(file_path, ctx.current_code)
-        ctx.created_files.append(
-            {
-                "task_id": ctx.current_task_index,
-                "file_path": file_path,
-                "saved_path": result.get("path"),
-                "size_bytes": result.get("size_bytes", 0),
-            }
-        )
+        if isinstance(ctx.current_code, dict):
+            # 다중 파일 모드: 각 파일을 개별 저장
+            for fp, src in ctx.current_code.items():
+                result = self.file_writer.save_code(fp, src)
+                ctx.created_files.append(
+                    {
+                        "task_id": ctx.current_task_index,
+                        "file_path": fp,
+                        "saved_path": result.get("path"),
+                        "size_bytes": result.get("size_bytes", 0),
+                    }
+                )
+        else:
+            current_task = ctx.todo_list[ctx.current_task_index]
+            file_path = current_task.get("file_path", f"output_{ctx.current_task_index}.py")
+            result = self.file_writer.save_code(file_path, ctx.current_code)
+            ctx.created_files.append(
+                {
+                    "task_id": ctx.current_task_index,
+                    "file_path": file_path,
+                    "saved_path": result.get("path"),
+                    "size_bytes": result.get("size_bytes", 0),
+                }
+            )
 
     def _check_escalation(self, ctx: LoopContext) -> LoopStep:
         if ctx.consecutive_fails >= ctx.max_consecutive_fails:
