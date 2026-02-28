@@ -83,10 +83,44 @@ class Brain:
         ), reasoning
 
     async def final_review(self, ctx) -> tuple[Dict[str, Any], str]:
-        response, reasoning = await self._call(
-            f"다음 과제의 최종 결과물을 검토하고 요약하라 {ctx.task_description}"
-        )
-        return {"status": "complete", "review": strip_cot(response)}, reasoning
+        # 생성된 파일 목록 정리
+        file_list = ""
+        if ctx.created_files:
+            lines = []
+            for f in ctx.created_files:
+                fp = f.get("file_path", "?")
+                sp = f.get("saved_path", "")
+                size = f.get("size_bytes", 0)
+                lines.append(f"  - {fp} ({size} bytes) → {sp}")
+            file_list = "\n".join(lines)
+        else:
+            file_list = "  (생성된 파일 없음)"
+
+        user_message = f"""다음 프로젝트의 최종 결과물을 검토하고 README.md를 작성하라.
+
+## 과제
+{ctx.task_description}
+
+## 구현 계획
+{ctx.plan or '(계획 없음)'}
+
+## 생성된 파일 목록
+{file_list}
+
+## 요구사항
+아래 내용을 포함하는 README.md를 마크다운 형식으로 작성하라:
+1. 프로젝트 개요 (1-2문장)
+2. 주요 기능
+3. 파일 구조 설명
+4. 설치 방법 (필요한 패키지, pip install 명령어)
+5. 실행 방법 (명령어 예시)
+6. 사용 방법 또는 조작법 (해당하는 경우)
+
+코드 블록 없이 순수 마크다운 텍스트만 출력하라. 앞뒤 설명 없이 README 본문만 출력하라."""
+
+        response, reasoning = await self._call(user_message)
+        readme_content = strip_cot(response).strip()
+        return {"status": "complete", "review": readme_content, "readme": readme_content}, reasoning
 
     async def _call(self, user_message: str) -> tuple[str, str]:
         logger.info("🧠 Brain._call() 시작")

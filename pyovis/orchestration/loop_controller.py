@@ -394,6 +394,21 @@ class ResearchLoopController:
         if reasoning:
             ctx.reasoning_log.append(f"[FINAL] {reasoning}")
 
+        # README.md 저장 (파일이 생성됩니다 기본 제공되는 경우에만)
+        readme_content = final_result.get("readme", "")
+        if readme_content and self.file_writer:
+            try:
+                readme_result = self.file_writer.save_code("README.md", readme_content)
+                readme_saved_path = readme_result.get("path", "")
+                ctx.created_files.append({
+                    "task_id": -1,
+                    "file_path": "README.md",
+                    "saved_path": readme_saved_path,
+                    "size_bytes": readme_result.get("size_bytes", 0),
+                })
+                logger.info(f"📝 README.md 저장 완료: {readme_saved_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ README.md 저장 실패: {e}")
         logger.info("🏁 스킬 평가 시작...")
         self.tracker.finish(ctx, final_result)
         await self.skill_manager.evaluate_and_patch(
