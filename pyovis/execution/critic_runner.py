@@ -290,7 +290,13 @@ class CriticRunner:
                 mem_limit="512m",
                 cpu_quota=100000,
                 detach=True,
-                environment={"PYTHONUNBUFFERED": "1"},
+                environment={
+                    "PYTHONUNBUFFERED": "1",
+                    # headless 환경에서 pygame/SDL 동작 허용 (dummy 디스플레이)
+                    "SDL_VIDEODRIVER": "dummy",
+                    "SDL_AUDIODRIVER": "dummy",
+                    "DISPLAY": "",
+                },
                 remove=False,
                 stdout=True,
                 stderr=True,
