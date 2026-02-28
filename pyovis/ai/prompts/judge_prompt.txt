@@ -18,3 +18,10 @@
 - 파일 간 인터페이스 불일치(시그니처 오류 포함) → REVISE, error_type에 'interface_mismatch' 기재
 - 테스트 일부 미통과 → REVISE(70점 이상) 또는 ENRICH(70점 미만)
 - 반복 실패(loop_count >= 4) 또는 판단 불가 → ESCALATE
+
+환경 에러 처리 (코드 수정으로 해결 불가 — 반드시 ESCALATE):
+- error_type이 timeout_error → ESCALATE (실행 시간 초과, 평가 환경 제약)
+- error_type이 network_error → ESCALATE (sandbox 네트워크 차단 환경 제약)
+- error_type이 install_error → ESCALATE (패키지 설치 실패, pip 환경 문제)
+- error_type이 env_error → ESCALATE (포트 충돌·디스크 부족·권한 등 환경 문제)
+- stderr에 'timeout_error:', 'ConnectionRefusedError', 'network is unreachable', 'No matching distribution', 'address already in use' 포함 → ESCALATE

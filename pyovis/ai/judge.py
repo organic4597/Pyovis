@@ -16,6 +16,11 @@ class JudgeResult:
     error_type: str | None  # Hands 자율 수정 가능 여부 판단용
 
 
+# 환경 제약으로 인한 에러 유형 — LLM 평가 없이 즉시 ESCALATE
+_ENV_ERROR_TYPES: frozenset[str] = frozenset({
+    "timeout_error", "network_error", "install_error", "env_error"
+})
+
 class Judge:
     def __init__(self, swap_manager: ModelSwapManager) -> None:
         self.system_prompt = load_prompt("judge_prompt.txt")
@@ -29,6 +34,16 @@ class Judge:
         pass_type = task.get("pass_type", "output_check")  # exit_only | output_check
 
         exit_code = critic_result.get("exit_code", -1)
+
+        # 환경 에러 → LLM 평가 없이 즉시 ESCALATE (코드 수정으로 해결 불가)
+        error_type = critic_result.get("error_type") or ""
+        if error_type in _ENV_ERROR_TYPES:
+            return JudgeResult(
+                verdict="ESCALATE",
+                score=0,
+                reason=f"환경 제약으로 인한 실패 ({error_type}): 코드 수정으로 해결 불가. 상위 에이전트 개입 필요.",
+                error_type=error_type,
+            )
         # exit_only: exit=0이면 즉시 PASS (GUI/게임/시각화 등 stdout 검증 불가 태스크)
         if pass_type == "exit_only":
             if exit_code == 0:

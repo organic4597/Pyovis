@@ -28,16 +28,30 @@ class ExecutionResult:
 
 class CriticRunner:
     SANDBOX_PATH = "/dev/shm/pyvis_sandbox"
-    ERROR_PATTERNS = {
-        "type_error": "TypeError",
-        "syntax_error": "SyntaxError",
-        "missing_import": "ModuleNotFoundError",
-        "name_error": "NameError",
-        "index_error": "IndexError",
-        "key_error": "KeyError",
-        "value_error": "ValueError",
-        "attribute_error": "AttributeError",
-    }
+    # (error_type, stderr_pattern) — 순서 중요: 위쪽이 우선순위 높음
+    ERROR_PATTERNS: list[tuple[str, str]] = [
+        # 코드 버그
+        ("type_error",     "TypeError"),
+        ("syntax_error",   "SyntaxError"),
+        ("missing_import", "ModuleNotFoundError"),
+        ("name_error",     "NameError"),
+        ("index_error",    "IndexError"),
+        ("key_error",      "KeyError"),
+        ("value_error",    "ValueError"),
+        ("attribute_error","AttributeError"),
+        # 환경 제약 (코드 버그 아님 — Judge가 REVISE 대신 ESCALATE 처리)
+        ("network_error",  "ConnectionRefusedError"),
+        ("network_error",  "NetworkError"),
+        ("network_error",  "network is unreachable"),
+        ("network_error",  "Name or service not known"),
+        ("network_error",  "Connection refused"),
+        ("install_error",  "Could not find a version"),
+        ("install_error",  "No matching distribution"),
+        ("install_error",  "No module named"),  # pip 설치 실패 후 import 실패
+        ("env_error",      "address already in use"),
+        ("env_error",      "No space left on device"),
+        ("env_error",      "Permission denied"),
+    ]
     # Dockerfile에 이미 설치된 패키지 (설치 불필요)
     _PREINSTALLED: Set[str] = {
         "requests", "pydantic", "fastapi", "httpx",
@@ -323,11 +337,25 @@ class CriticRunner:
 
         except Exception as exc:
             elapsed = time.time() - start_time
+            exc_str = str(exc)
             stderr = getattr(exc, "stderr", None)
             if stderr is None:
-                stderr_text = str(exc)
+                stderr_text = exc_str
             else:
                 stderr_text = stderr.decode() if hasattr(stderr, "decode") else str(stderr)
+            # container.wait() 타임아웃 명시 감지
+            is_timeout = any(kw in exc_str.lower() for kw in (
+                "read timed out", "timed out", "timeout", "readtimeout"
+            ))
+            if is_timeout:
+                logger.info(f"[CRITIC] 콘테이너 timeout ({timeout}s) — 실행 시간 초과")
+                return ExecutionResult(
+                    stdout="",
+                    stderr=f"timeout_error: 코드 실행이 {timeout}초를 초과했습니다. 몴한 루프 프로그램이거나 평가 환경 제약일 수 있습니다.",
+                    exit_code=-1,
+                    execution_time=elapsed,
+                    error_type="timeout_error",
+                )
             return ExecutionResult(
                 stdout="",
                 stderr=stderr_text,
@@ -550,7 +578,7 @@ class CriticRunner:
                 os.unlink(temp_file)
 
     def _classify_error(self, stderr: str) -> str:
-        for error_type, pattern in self.ERROR_PATTERNS.items():
+        for error_type, pattern in self.ERROR_PATTERNS:
             if pattern in stderr:
                 return error_type
         return "unknown_error"
