@@ -71,6 +71,11 @@ class Planner:
                     item["id"] = i + 1
                 if "file_path" not in item:
                     item["file_path"] = f"file_{item.get('id', i+1)}.py"
+                else:
+                    # LLM이 "config.py - 설명" 형태로 반환하는 경우 설명 부분 제거
+                    fp = item["file_path"]
+                    if " - " in fp:
+                        item["file_path"] = fp.split(" - ")[0].strip()
                 normalized.append(item)
         result["todo_list"] = normalized
         

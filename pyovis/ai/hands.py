@@ -30,15 +30,29 @@ logger = logging.getLogger(__name__)
 
 _CODE_FENCE_RE = re.compile(r"^```[\w]*\n?", re.MULTILINE)
 _CODE_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
+# ```json ... ``` 감싸진 pip_packages 블록
 _PIP_PACKAGES_RE = re.compile(r"```json\s*(\{[^`]*?\"pip_packages\"[^`]*?\})\s*```", re.DOTALL)
+# 코드펜스 없이 raw JSON으로 출력된 pip_packages 블록
+_PIP_PACKAGES_RAW_RE = re.compile(r"\{\s*\"pip_packages\"\s*:\s*\[[^\]]*\]\s*\}", re.DOTALL)
 
 
 def _extract_pip_packages(response: str) -> List[str]:
     """LLM 응답에서 pip_packages JSON 블록을 요드합니다."""
+    # ```json ... ``` 구조 먼저 시도
     match = _PIP_PACKAGES_RE.search(response)
     if match:
         try:
             data = json.loads(match.group(1))
+            pkgs = data.get("pip_packages", [])
+            if isinstance(pkgs, list):
+                return [p for p in pkgs if isinstance(p, str) and p.strip()]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # raw JSON 구조 시도
+    match = _PIP_PACKAGES_RAW_RE.search(response)
+    if match:
+        try:
+            data = json.loads(match.group(0))
             pkgs = data.get("pip_packages", [])
             if isinstance(pkgs, list):
                 return [p for p in pkgs if isinstance(p, str) and p.strip()]
@@ -49,7 +63,9 @@ def _extract_pip_packages(response: str) -> List[str]:
 
 def _strip_pip_packages_block(response: str) -> str:
     """LLM 응답에서 pip_packages JSON 블록을 제거합니다."""
-    return _PIP_PACKAGES_RE.sub("", response).rstrip()
+    result = _PIP_PACKAGES_RE.sub("", response)
+    result = _PIP_PACKAGES_RAW_RE.sub("", result)
+    return result.rstrip()
 class Hands:
     def __init__(
         self,
