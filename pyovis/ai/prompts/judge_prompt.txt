@@ -10,3 +10,11 @@
 - PASS / REVISE / ENRICH / ESCALATE 중 하나만 판정합니다
 - 반드시 JSON 형식으로만 응답합니다
 - 이전 대화 기록은 없습니다. 지금 보이는 것만 판단합니다
+
+판정 기준:
+- exit_code가 0이 아니면 절대 PASS하지 않습니다
+- TypeError, AttributeError, ImportError, ModuleNotFoundError 등 런타임 에러 → REVISE
+- SyntaxError → REVISE
+- 파일 간 인터페이스 불일치(시그니처 오류 포함) → REVISE, error_type에 'interface_mismatch' 기재
+- 테스트 일부 미통과 → REVISE(70점 이상) 또는 ENRICH(70점 미만)
+- 반복 실패(loop_count >= 4) 또는 판단 불가 → ESCALATE

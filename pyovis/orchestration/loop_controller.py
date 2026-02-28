@@ -299,16 +299,27 @@ class ResearchLoopController:
 
                     # Save previous code for rollback
                     prev_code = ctx.current_code or ""
+                    # dict 모드: 현재 task의 파일만 추출해 revise에 넘김
+                    current_file_path = current_task.get("file_path", "output.py")
+                    if isinstance(prev_code, dict):
+                        prev_code_str = prev_code.get(current_file_path, next(iter(prev_code.values()), ""))
+                    else:
+                        prev_code_str = prev_code
 
                     ctx.current_code, reasoning = await self.hands.revise(
                         current_task,
-                        prev_code,
+                        prev_code_str,
                         ctx.critic_result,
                         ctx.self_fix_scope,
                         ctx.judge_result,
                         ctx.pass_criteria,
                         skill_context,
                     )
+                    # dict 모드: 수정된 파일을 dict에 다시 병합
+                    if isinstance(prev_code, dict) and isinstance(ctx.current_code, str):
+                        merged = dict(prev_code)
+                        merged[current_file_path] = ctx.current_code
+                        ctx.current_code = merged
 
                     # Log S/R metrics if available
                     sr_metrics = getattr(self.hands, "_last_sr_metrics", None)
