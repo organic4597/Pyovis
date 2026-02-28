@@ -379,6 +379,7 @@ class ResearchLoopController:
                     ctx.pass_criteria = escalation_result["new_criteria"]
                     ctx.consecutive_fails = 0
                     ctx.current_task_index = 0  # Reset index for new todo_list
+                    ctx.setup_commands = []  # 이전 pip 명령 초기화 (headless 재감지 방지)
                     ctx.current_step = LoopStep.BUILD
                 else:
                     logger.info(f"[DEBUG] Brain 반환: action != 'revise_plan', 사람 에스케일레이션 실행")

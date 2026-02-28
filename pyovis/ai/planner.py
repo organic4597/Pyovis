@@ -31,7 +31,8 @@ class Planner:
       "id": 1,
       "file_path": "path/to/file.py",
       "title": "구현할 기능 제목",
-      "description": "이 파일에 구현할 구체적인 내용. 어떤 클래스/함수를 만들지, 어떤 로직을 구현할지 상세히"
+      "description": "이 파일에 구현할 구체적인 내용. 어떤 클래스/함수를 만들지, 어떤 로직을 구현할지 상세히",
+      "pass_type": "output_check"
     }}
   ],
   "pass_criteria": {{

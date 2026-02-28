@@ -26,6 +26,26 @@ class Judge:
         self, task: dict, pass_criteria: dict, critic_result: dict, loop_count: int
     ) -> JudgeResult:
         criteria = pass_criteria.get(str(task["id"]), [])
+        pass_type = task.get("pass_type", "output_check")  # exit_only | output_check
+
+        exit_code = critic_result.get("exit_code", -1)
+        # exit_only: exit=0이면 즉시 PASS (GUI/게임/시각화 등 stdout 검증 불가 태스크)
+        if pass_type == "exit_only":
+            if exit_code == 0:
+                return JudgeResult(
+                    verdict="PASS",
+                    score=100,
+                    reason="exit_only 모드: exit=0 정상 종료",
+                    error_type=None,
+                )
+            else:
+                stderr = critic_result.get("stderr", "") or ""
+                return JudgeResult(
+                    verdict="REVISE",
+                    score=0,
+                    reason=f"exit_only 모드: exit={exit_code}, 오류={stderr[:200]}",
+                    error_type=critic_result.get("error_type"),
+                )
 
         user_message = f"""
 Task: {task['title']}
