@@ -11,6 +11,7 @@ from pyovis.ai.response_utils import extract_reasoning
 from pyovis.execution.search_replace import (
     apply_search_replace,
     format_metrics,
+    parse_blocks,
     ApplyResult,
 )
 from pyovis.memory.experience_db import (
@@ -316,7 +317,13 @@ class Hands:
     def _apply_search_replace_with_fallback(
         self, prev_code: str, llm_response: str
     ) -> str:
-        """Apply S/R blocks to code. Falls back to whole-file on failure.
+        """Apply S/R blocks to code. Falls back to clean extraction on failure.
+
+        Fallback hierarchy:
+          1. S/R blocks applied successfully → use result
+          2. S/R blocks found but failed → extract REPLACE portions only
+          3. No S/R blocks found → strip code fences, use as whole-file rewrite
+          4. All else fails → return prev_code unchanged
 
         Stores metrics in self._last_sr_metrics for logging by loop_controller.
         """
@@ -330,15 +337,51 @@ class Hands:
             )
             return sr_result.new_code
 
-        # Fallback: treat LLM response as whole-file rewrite
-        logger.warning(
-            f"S/R 블록 실패 ({sr_result.fail_reason}), "
-            f"전체 파일 재작성으로 fallback"
-        )
+        # ── Fallback: S/R 블록 실패 시 마커 없는 깨끗한 코드 추출 ──
         self._last_sr_metrics["sr_fallback_triggered"] = True
 
-        # The LLM response IS the full code (fallback behavior)
-        return llm_response
+        # Case A: S/R 블록이 파싱은 됐지만 적용 실패 → REPLACE 부분만 합치기
+        blocks = parse_blocks(llm_response)
+        if blocks:
+            logger.warning(
+                f"S/R 블록 적용 실패 ({sr_result.fail_reason}), "
+                f"REPLACE 부분만 추출하여 전체 파일 재작성으로 fallback"
+            )
+            # LLM이 전체 파일을 S/R 블록 하나로 보낸 경우 → REPLACE가 전체 코드
+            # 여러 블록이면 REPLACE들을 합침 (부분 패치이므로 prev_code에 적용하는 게 이상적이지만,
+            # 매칭 자체가 실패한 상태이므로 최선의 시도로 합침)
+            if len(blocks) == 1:
+                return blocks[0].replace
+            # 여러 블록: prev_code 유지 (부분 REPLACE 합치면 코드 깨짐 위험)
+            logger.warning(
+                f"다중 S/R 블록({len(blocks)}개) 매칭 실패, prev_code 유지"
+            )
+            return prev_code
+
+        # Case B: S/R 블록 없음 → LLM이 코드를 그냥 텍스트로 반환한 경우
+        # 코드 펜스 strip 후 전체 파일로 사용
+        cleaned = self._strip_code_fences(llm_response)
+        if cleaned.strip():
+            logger.warning(
+                "S/R 블록 없음, 코드 펜스 제거 후 전체 파일 재작성으로 fallback"
+            )
+            return cleaned
+
+        # Case C: 아무것도 추출 못함 → prev_code 유지 (데이터 손실 방지)
+        logger.error(
+            "S/R fallback 실패: 코드 추출 불가, prev_code 유지"
+        )
+        return prev_code
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Remove markdown code fences from LLM response."""
+        # ```python ... ``` or ``` ... ```
+        pattern = r"```(?:\w+)?\n(.*?)```"
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            return "\n".join(m.strip() for m in matches)
+        return text
 
     async def _call_with_tools(self, user_message: str, system_prompt: str | None = None) -> tuple[str, str]:
         """LLM call with tool calling."""

@@ -207,6 +207,13 @@ def create_execution_plan_from_task(
         "psycopg2": "psycopg2-binary",
         "fitz": "PyMuPDF",
         "attr": "attrs",
+        "flask": "Flask",
+        "lxml": "lxml",
+        "gi": "PyGObject",
+        "wx": "wxPython",
+        "skimage": "scikit-image",
+        "usb": "pyusb",
+        "websocket": "websocket-client",
     }
 
     # pip_packages가 Hands에서 전달된 경우 우선 사용
@@ -221,6 +228,8 @@ def create_execution_plan_from_task(
             setup_commands.append("pip install numpy")
         if "import pandas" in code or "from pandas" in code:
             setup_commands.append("pip install pandas")
+        if "import flask" in code or "from flask" in code:
+            setup_commands.append("pip install flask")
         if "import fastapi" in code or "from fastapi" in code:
             setup_commands.append("pip install fastapi uvicorn")
         # import명 → pip 매핑 테이블에 있는 모듈들 삤캐

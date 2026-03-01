@@ -238,7 +238,6 @@ class ModelSwapManager:
             "--threads", str(self.config.threads),
             "--port", str(self.config.port),
             "--host", self.config.host,
-            "--log-disable",
         ]
 
         if role in self.config.jinja_roles:
@@ -255,7 +254,6 @@ class ModelSwapManager:
             )
 
         logger.info(f"Started llama-server PID={self._process.pid} for {role}")
-        self.wait_for_health_sync(role)
 
     async def _kill_port_occupant(self) -> None:
         """Kill any process occupying our port (handles stale processes from
@@ -322,9 +320,20 @@ class ModelSwapManager:
         await asyncio.sleep(2)
 
     async def _wait_for_ready(self) -> bool:
-        for i in range(self.config.health_check_timeout):
+        deadline = time.time() + self.config.health_check_timeout
+        while time.time() < deadline:
             if self._process and self._process.poll() is not None:
-                logger.error(f"Server process died with code {self._process.returncode}")
+                rc = self._process.returncode
+                logger.error(f"Server process died with exit code {rc}")
+                # 로그 파일에서 마지막 N줄 추출해 원인 힌트 제공
+                try:
+                    log_path = Path(self.config.log_dir) / f"{self._current_role.value if self._current_role else 'unknown'}.log"
+                    if log_path.exists():
+                        lines = log_path.read_text().splitlines()
+                        tail = '\n'.join(lines[-20:])
+                        logger.error(f"Last log lines:\n{tail}")
+                except Exception:
+                    pass
                 return False
 
             if await self._health_check(retries=1):
@@ -332,6 +341,7 @@ class ModelSwapManager:
 
             await asyncio.sleep(self.config.health_check_interval)
 
+        logger.error(f"Health check timed out after {self.config.health_check_timeout}s")
         return False
 
     async def _health_check(self, retries: int = 1) -> bool:

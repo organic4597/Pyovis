@@ -79,6 +79,13 @@ class CriticRunner:
         "psycopg2": "psycopg2-binary",
         "fitz": "PyMuPDF",
         "attr": "attrs",
+        "flask": "Flask",
+        "lxml": "lxml",
+        "gi": "PyGObject",
+        "wx": "wxPython",
+        "skimage": "scikit-image",
+        "usb": "pyusb",
+        "websocket": "websocket-client",
     }
     # Python 표준 라이브러리 최상위 모듈 (설치 불필요)
     _STDLIB: Set[str] = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else {
@@ -138,12 +145,21 @@ class CriticRunner:
 
 
     def _install_dependencies_sync(self, packages: list[str], timeout: int = 60) -> None:
-        """sandbox 콘테이너 안에서 pip install을 실행합니다."""
+        """sandbox 볼륨(/workspace/.pylibs)에 pip install --target으로 패키지를 설치합니다.
+
+        별도 컨테이너에서 설치하더라도 공유 볼륨에 저장되므로
+        이후 실행 컨테이너에서 PYTHONPATH로 참조 가능합니다.
+        """
         if not packages:
             return
         pkg_list = " ".join(packages)
-        cmd = f"pip install --quiet {pkg_list}"
-        logger.info(f"프리세인스톨 패키지 설치 시작: {packages}")
+        # --target으로 공유 볼륨 내 .pylibs에 설치 → 실행 컨테이너에서 PYTHONPATH로 참조
+        cmd = f"pip install --quiet --target /workspace/.pylibs {pkg_list}"
+        logger.info(f"패키지 설치 시작 (→ /workspace/.pylibs): {packages}")
+        # .pylibs 디렉토리 미리 생성 (USER sandbox=uid 1000 권한 문제 방지)
+        pylibs_dir = os.path.join(self.SANDBOX_PATH, ".pylibs")
+        os.makedirs(pylibs_dir, exist_ok=True)
+        os.chmod(pylibs_dir, 0o777)
         container = None
         try:
             container = self.client.containers.run(
@@ -216,20 +232,32 @@ class CriticRunner:
                 if mapped:
                     self._install_dependencies_sync(mapped)
 
-            # 각 파일을 SANDBOX_PATH에 저장
+            # 각 파일을 SANDBOX_PATH에 저장 (서브디렉토리 구조 보존)
             for fp, src in files.items():
-                fname = os.path.basename(fp)
-                dest = os.path.join(self.SANDBOX_PATH, fname)
+                dest = os.path.join(self.SANDBOX_PATH, fp)
+                dest_dir = os.path.dirname(dest)
+                if dest_dir != self.SANDBOX_PATH:
+                    os.makedirs(dest_dir, exist_ok=True)
                 with open(dest, "w") as fh:
                     fh.write(src)
                 os.chmod(dest, 0o644)
                 written_files.append(dest)
 
-            # 진입점 결정: main.py > 첫 번째 파일
-            entry_name = next(
-                (os.path.basename(fp) for fp in files if os.path.basename(fp) == "main.py"),
-                os.path.basename(list(files.keys())[0]),
-            )
+            # 진입점 결정: main.py > app.py > 첫 번째 파일 (서브디렉토리 내 포함)
+            entry_name = None
+            for fp in files:
+                base = os.path.basename(fp)
+                if base == "main.py":
+                    entry_name = fp
+                    break
+            if entry_name is None:
+                for fp in files:
+                    base = os.path.basename(fp)
+                    if base == "app.py":
+                        entry_name = fp
+                        break
+            if entry_name is None:
+                entry_name = list(files.keys())[0]
             run_cmd = "bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & until [ -e /tmp/.X99-lock ]; do sleep 0.05; done && DISPLAY=:99 python /workspace/" + shlex.quote(entry_name) + "'"
         else:
             # ── 단일 파일 모드 ──────────────────────────────────────
@@ -266,6 +294,7 @@ class CriticRunner:
                 detach=True,
                 environment={
                     "PYTHONUNBUFFERED": "1",
+                    "PYTHONPATH": "/workspace/.pylibs",
                 },
                 remove=False,
                 stdout=True,
@@ -328,11 +357,27 @@ class CriticRunner:
             # 다단일 파일 모드: 임시 파일 삭제
             if temp_file and os.path.exists(temp_file):
                 os.unlink(temp_file)
-            # 다중 파일 모드: sandbox에 복사한 파일들 삭제
+            # 다중 파일 모드: sandbox에 복사한 파일들 및 서브디렉토리 삭제
             for wf in written_files:
                 try:
                     if os.path.exists(wf):
                         os.unlink(wf)
+                except Exception:
+                    pass
+            # 생성된 빈 서브디렉토리 정리
+            for wf in written_files:
+                wf_dir = os.path.dirname(wf)
+                try:
+                    if wf_dir != self.SANDBOX_PATH and os.path.isdir(wf_dir):
+                        os.rmdir(wf_dir)  # 빈 디렉토리만 삭제
+                except OSError:
+                    pass  # 비어있지 않으면 무시
+            # pip install --target 으로 설치된 .pylibs 디렉토리 정리
+            pylibs_dir = os.path.join(self.SANDBOX_PATH, ".pylibs")
+            if os.path.isdir(pylibs_dir):
+                import shutil
+                try:
+                    shutil.rmtree(pylibs_dir)
                 except Exception:
                     pass
 

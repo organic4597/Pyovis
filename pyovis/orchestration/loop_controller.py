@@ -193,6 +193,8 @@ class ResearchLoopController:
                 if full_code_files:
                     ctx.current_code = full_code_files  # dict {file_path: code}
                     logger.info(f"✅ 전체 코드 생성 완료 ({len(full_code_files)} 파일): {list(full_code_files.keys())}")
+                    # BUILD 직후 즉시 저장 — PASS/ESCALATE 도달 전에도 코드가 디스크에 존재하도록
+                    await self._save_current_code(ctx)
                 else:
                     ctx.current_code = None
                     logger.error("❌ 생성된 코드가 없습니다.")
@@ -350,6 +352,8 @@ class ResearchLoopController:
 
                     if reasoning:
                         ctx.reasoning_log.append(f"[REVISE] {reasoning}")
+                    # REVISE 후 즉시 저장 — 수정된 코드가 항상 디스크에 반영되도록
+                    await self._save_current_code(ctx)
                     ctx.current_step = LoopStep.CRITIQUE
                 else:
                     ctx.current_step = LoopStep.ESCALATE
@@ -361,6 +365,7 @@ class ResearchLoopController:
                 await self._notify(ctx, "⚠️ 에스컬레이션 처리 중...")
                 logger.info(f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}")
                 if ctx.loop_count >= ctx.max_loops:
+                    await self._save_current_code(ctx)  # 에스켈레이션시에도 현재까지 생성된 코드 보존
                     return self._human_escalation(ctx)
 
                 escalation_result, reasoning = await self.brain.handle_escalation(ctx)
@@ -383,6 +388,7 @@ class ResearchLoopController:
                     ctx.current_step = LoopStep.BUILD
                 else:
                     logger.info(f"[DEBUG] Brain 반환: action != 'revise_plan', 사람 에스케일레이션 실행")
+                    await self._save_current_code(ctx)  # Brain도 몰르는 경우 코드 보존
                     return self._human_escalation(ctx)
 
         # ============================================================

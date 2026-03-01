@@ -78,6 +78,16 @@ class Planner:
                         item["file_path"] = fp.split(" - ")[0].strip()
                 normalized.append(item)
         result["todo_list"] = normalized
+
+        # file_structure도 동일하게 정리 ("app.py - 설명" → "app.py")
+        file_structure = result.get("file_structure", [])
+        cleaned_structure = []
+        for entry in file_structure:
+            if isinstance(entry, str) and " - " in entry:
+                cleaned_structure.append(entry.split(" - ")[0].strip())
+            else:
+                cleaned_structure.append(entry)
+        result["file_structure"] = cleaned_structure
         
         return result, reasoning
 

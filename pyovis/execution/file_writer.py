@@ -19,14 +19,13 @@ class WorkspaceManager:
         return f"project_{timestamp}"
     
     def create_project(self, structure: list[str] | None = None) -> Path:
+        """Create project directory structure (directories only, no empty files)."""
         self.project_root.mkdir(parents=True, exist_ok=True)
         
         if structure:
             for file_path in structure:
                 full_path = self.project_root / file_path
                 full_path.parent.mkdir(parents=True, exist_ok=True)
-                if not full_path.exists():
-                    full_path.touch()
         
         return self.project_root
     
