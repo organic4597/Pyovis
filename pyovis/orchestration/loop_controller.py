@@ -47,6 +47,8 @@ class LoopContext:
     max_loops: int = 5
     consecutive_fails: int = 0
     max_consecutive_fails: int = 3
+    escalation_count: int = 0
+    max_escalations: int = 2
     fail_reasons: list[str] = field(default_factory=list)
     current_step: LoopStep = LoopStep.PLAN
     score: int = 0
@@ -60,6 +62,17 @@ class LoopContext:
     progress_callback: Optional[Callable[[str], Awaitable[None]]] = None
     reasoning_log: list[str] = field(default_factory=list)
     setup_commands: list[str] = field(default_factory=list)  # Hands가 반환한 pip install 명령
+
+    # 토큰 폭탄 방지: 리스트 크기 제한
+    MAX_FAIL_REASONS: int = field(default=10, repr=False)
+    MAX_REASONING_LOG: int = field(default=15, repr=False)
+
+    def trim_logs(self) -> None:
+        """누적 리스트를 최대 크기로 잘라냄 (토큰 폭탄 방지)."""
+        if len(self.fail_reasons) > self.MAX_FAIL_REASONS:
+            self.fail_reasons = self.fail_reasons[-self.MAX_FAIL_REASONS:]
+        if len(self.reasoning_log) > self.MAX_REASONING_LOG:
+            self.reasoning_log = self.reasoning_log[-self.MAX_REASONING_LOG:]
 
 class ResearchLoopController:
     def __init__(
@@ -101,6 +114,8 @@ class ResearchLoopController:
             ctx.project_id = self.workspace.project_id
 
         while ctx.current_step != LoopStep.COMPLETE:
+            # 토큰 폭탄 방지: 루프 시작마다 누적 리스트 크기 제한
+            ctx.trim_logs()
             # ============================================================
             # 1. PLAN 단계: 계획 수립
             # ============================================================
@@ -210,7 +225,20 @@ class ResearchLoopController:
                 await self._notify(ctx, "🧪 실행 테스트 중...")
                 if ctx.current_code is None:
                     raise RuntimeError("No code to execute in critique step")
-                result = await self.critic.execute(ctx.current_code, allow_network=True, setup_commands=ctx.setup_commands or None)
+                try:
+                    result = await self.critic.execute(ctx.current_code, allow_network=True, setup_commands=ctx.setup_commands or None)
+                except Exception as e:
+                    logger.error(f"critic.execute() 예외 발생: {e}")
+                    # Docker 데몬 다운 등 인프라 장애 → 실행 실패로 처리 (abort 방지)
+                    ctx.critic_result = {
+                        "stdout": "",
+                        "stderr": f"critic.execute() 예외: {e}",
+                        "exit_code": -1,
+                        "execution_time": 0.0,
+                        "error_type": "INFRASTRUCTURE_ERROR",
+                    }
+                    ctx.current_step = LoopStep.EVALUATE
+                    continue
                 ctx.critic_result = {
                     "stdout": result.stdout,
                     "stderr": result.stderr,
@@ -362,8 +390,16 @@ class ResearchLoopController:
             # 6. ESCALATE 단계: 에스컬레이션
             # ============================================================
             elif ctx.current_step == LoopStep.ESCALATE:
-                await self._notify(ctx, "⚠️ 에스컬레이션 처리 중...")
-                logger.info(f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}")
+                await self._notify(ctx, "⚠️ 에스켈레이션 처리 중...")
+                ctx.escalation_count += 1
+                logger.info(f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}, escalation_count={ctx.escalation_count}")
+
+                # 무한 ESCALATE 루프 방지: 최대 에스켈레이션 횟수 초과 시 사람에게 넘김
+                if ctx.escalation_count > ctx.max_escalations:
+                    logger.warning(f"무한 ESCALATE 방지: escalation_count({ctx.escalation_count}) > max({ctx.max_escalations})")
+                    await self._save_current_code(ctx)
+                    return self._human_escalation(ctx)
+
                 if ctx.loop_count >= ctx.max_loops:
                     await self._save_current_code(ctx)  # 에스켈레이션시에도 현재까지 생성된 코드 보존
                     return self._human_escalation(ctx)
@@ -375,13 +411,17 @@ class ResearchLoopController:
                 logger.info(f"[DEBUG] escalation_result.get('action') = {escalation_result.get('action')}")
                 if escalation_result.get("action") == "revise_plan":
                     ctx.plan = escalation_result["new_plan"]
-                    raw_todo = escalation_result["new_todo"] or []
+                    raw_todo = escalation_result.get("new_todo") or []
+                    if not raw_todo:
+                        logger.warning("ESCALATE: Brain이 빈 todo_list 반환, 사람 에스켈레이션 실행")
+                        await self._save_current_code(ctx)
+                        return self._human_escalation(ctx)
                     ctx.todo_list = [
                         t if isinstance(t, dict)
                         else {"id": i + 1, "title": str(t), "description": str(t)}
                         for i, t in enumerate(raw_todo)
                     ]
-                    ctx.pass_criteria = escalation_result["new_criteria"]
+                    ctx.pass_criteria = escalation_result.get("new_criteria") or ctx.pass_criteria
                     ctx.consecutive_fails = 0
                     ctx.current_task_index = 0  # Reset index for new todo_list
                     ctx.setup_commands = []  # 이전 pip 명령 초기화 (headless 재감지 방지)

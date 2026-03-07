@@ -340,32 +340,21 @@ class Hands:
         # ── Fallback: S/R 블록 실패 시 마커 없는 깨끗한 코드 추출 ──
         self._last_sr_metrics["sr_fallback_triggered"] = True
 
-        # Case A: S/R 블록이 파싱은 됐지만 적용 실패 → REPLACE 부분만 합치기
+        # Case A: S/R 블록이 파싱은 됐지만 적용 실패 → prev_code 유지 (전체 재작성 방지)
         blocks = parse_blocks(llm_response)
         if blocks:
             logger.warning(
-                f"S/R 블록 적용 실패 ({sr_result.fail_reason}), "
-                f"REPLACE 부분만 추출하여 전체 파일 재작성으로 fallback"
-            )
-            # LLM이 전체 파일을 S/R 블록 하나로 보낸 경우 → REPLACE가 전체 코드
-            # 여러 블록이면 REPLACE들을 합침 (부분 패치이므로 prev_code에 적용하는 게 이상적이지만,
-            # 매칭 자체가 실패한 상태이므로 최선의 시도로 합침)
-            if len(blocks) == 1:
-                return blocks[0].replace
-            # 여러 블록: prev_code 유지 (부분 REPLACE 합치면 코드 깨짐 위험)
-            logger.warning(
-                f"다중 S/R 블록({len(blocks)}개) 매칭 실패, prev_code 유지"
+                f"S/R 블록 {len(blocks)}개 매칭 실패 ({sr_result.fail_reason}), "
+                f"prev_code 유지 (전체 재작성 방지)"
             )
             return prev_code
 
-        # Case B: S/R 블록 없음 → LLM이 코드를 그냥 텍스트로 반환한 경우
-        # 코드 펜스 strip 후 전체 파일로 사용
-        cleaned = self._strip_code_fences(llm_response)
-        if cleaned.strip():
-            logger.warning(
-                "S/R 블록 없음, 코드 펜스 제거 후 전체 파일 재작성으로 fallback"
-            )
-            return cleaned
+        # Case B: S/R 블록 없음 → prev_code 유지 (전체 재작성 방지)
+        # LLM이 코드를 그냥 텍스트로 반환해도 기존 코드를 보존
+        logger.warning(
+            "S/R 블록 없음, prev_code 유지 (전체 재작성 방지)"
+        )
+        return prev_code
 
         # Case C: 아무것도 추출 못함 → prev_code 유지 (데이터 손실 방지)
         logger.error(

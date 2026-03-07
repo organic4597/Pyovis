@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from dataclasses import dataclass
 
@@ -7,6 +8,7 @@ import httpx
 from pyovis.ai.prompts.loaders import load_prompt
 from pyovis.ai.swap_manager import ModelSwapManager
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class JudgeResult:
@@ -82,8 +84,29 @@ PASS 기준을 모두 충족하면 PASS.
 {{"verdict": "PASS|REVISE|ENRICH|ESCALATE", "score": 0-100,
   "reason": "판단 근거", "error_type": "에러 유형 (없으면 null)"}}
 """
-        response = await self._call_fresh(user_message)
-        return self._parse(response)
+        # 재시도 로직: 파싱 실패 시 최대 2회 재시도 후 ESCALATE
+        max_retries = 2
+        last_error = None
+        for attempt in range(1 + max_retries):
+            try:
+                response = await self._call_fresh(user_message)
+                result = self._parse(response)
+                if result.verdict != "ESCALATE" or result.reason != "Judge 응답 파싱 실패":
+                    return result
+                # 파싱 실패로 ESCALATE 반환된 경우 재시도
+                last_error = "parse_failure"
+                logger.warning(f"Judge 파싱 실패, 재시도 {attempt + 1}/{1 + max_retries}")
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Judge API 호출 실패: {e}, 재시도 {attempt + 1}/{1 + max_retries}")
+        # 모든 재시도 실패
+        logger.error(f"Judge {1 + max_retries}회 재시도 모두 실패: {last_error}")
+        return JudgeResult(
+            verdict="ESCALATE",
+            score=0,
+            reason=f"Judge {1 + max_retries}회 재시도 모두 실패: {last_error}",
+            error_type=None,
+        )
 
     async def _call_fresh(self, user_message: str) -> str:
         """매번 새로운 컨텍스트 — 이전 대화 기록 없음."""

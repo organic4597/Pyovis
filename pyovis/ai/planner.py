@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any, Dict
 
@@ -8,6 +9,7 @@ from pyovis.ai.prompts.loaders import load_prompt
 from pyovis.ai.swap_manager import ModelSwapManager
 from pyovis.ai.response_utils import extract_reasoning, parse_json_message, strip_cot
 
+logger = logging.getLogger(__name__)
 
 class Planner:
     def __init__(self, swap_manager: ModelSwapManager) -> None:
@@ -78,6 +80,21 @@ class Planner:
                         item["file_path"] = fp.split(" - ")[0].strip()
                 normalized.append(item)
         result["todo_list"] = normalized
+
+        # P2-4: Planner 스키마 검증 — 필수 필드 보증
+        if not result.get("todo_list"):
+            logger.warning("Planner가 빈 todo_list 반환, 기본값 생성")
+            result["todo_list"] = [{"id": 1, "file_path": "main.py", "title": "main", "description": ctx.task_description}]
+        if not result.get("pass_criteria"):
+            logger.warning("Planner가 pass_criteria 누락, 기본값 생성")
+            result["pass_criteria"] = {
+                str(t["id"]): f"{t.get('title', 'task')} 완료"
+                for t in result["todo_list"]
+            }
+
+        # P2-2: pass_criteria 키 str 정규화 (Brain이 int 키 반환 가능)
+        raw_criteria = result.get("pass_criteria", {})
+        result["pass_criteria"] = {str(k): v for k, v in raw_criteria.items()}
 
         # file_structure도 동일하게 정리 ("app.py - 설명" → "app.py")
         file_structure = result.get("file_structure", [])

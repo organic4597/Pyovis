@@ -14,6 +14,14 @@ class WorkspaceManager:
         self.project_id = project_id or self._generate_project_id()
         self.project_root = self.WORKSPACE_ROOT / self.project_id
         
+    def _validate_path(self, relative_path: str) -> Path:
+        """Resolve and validate that path stays within project_root (path traversal 방지)."""
+        full_path = (self.project_root / relative_path).resolve()
+        if not str(full_path).startswith(str(self.project_root.resolve())):
+            raise ValueError(
+                f"Path traversal 거부: {relative_path!r} → project_root 외부 접근 시도"
+            )
+        return full_path
     def _generate_project_id(self) -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"project_{timestamp}"
@@ -30,22 +38,22 @@ class WorkspaceManager:
         return self.project_root
     
     def get_file_path(self, relative_path: str) -> Path:
-        return self.project_root / relative_path
+        return self._validate_path(relative_path)
     
     def write_file(self, relative_path: str, content: str) -> Path:
-        full_path = self.project_root / relative_path
+        full_path = self._validate_path(relative_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content, encoding="utf-8")
         return full_path
     
     def read_file(self, relative_path: str) -> str | None:
-        full_path = self.project_root / relative_path
+        full_path = self._validate_path(relative_path)
         if full_path.exists():
             return full_path.read_text(encoding="utf-8")
         return None
     
     def file_exists(self, relative_path: str) -> bool:
-        return (self.project_root / relative_path).exists()
+        return self._validate_path(relative_path).exists()
     
     def list_files(self, pattern: str = "**/*") -> list[Path]:
         return list(self.project_root.glob(pattern))
