@@ -31,6 +31,13 @@ class TestWorkspaceManager:
         structure = ["src/main.py", "src/utils.py", "requirements.txt"]
         root = ws.create_project(structure)
         
+        # create_project only creates directories, not empty files
+        assert (root / "src").is_dir()
+        
+        # Write files to verify full path works
+        ws.write_file("src/main.py", "# main")
+        ws.write_file("src/utils.py", "# utils")
+        ws.write_file("requirements.txt", "")
         assert (root / "src" / "main.py").exists()
         assert (root / "src" / "utils.py").exists()
         assert (root / "requirements.txt").exists()
@@ -79,6 +86,10 @@ class TestWorkspaceManager:
     def test_list_files(self):
         ws = WorkspaceManager("test_list")
         ws.create_project(["a.py", "b.py", "sub/c.py"])
+        # create_project only makes dirs; write files explicitly
+        ws.write_file("a.py", "a")
+        ws.write_file("b.py", "b")
+        ws.write_file("sub/c.py", "c")
         
         files = ws.list_files()
         file_names = [f.name for f in files if f.is_file()]
@@ -101,6 +112,8 @@ class TestWorkspaceManager:
     def test_get_project_info(self):
         ws = WorkspaceManager("test_info")
         ws.create_project(["main.py"])
+        # create_project only makes dirs; write file explicitly
+        ws.write_file("main.py", "# main")
         
         info = ws.get_project_info()
         

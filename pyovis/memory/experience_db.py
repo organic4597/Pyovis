@@ -79,47 +79,6 @@ class ExperienceEntry:
     # Pattern metadata
     techniques_used: List[str] = field(default_factory=list)
     skills_applied: List[str] = field(default_factory=list)
-class ExperienceEntry:
-    """
-    Single experience record for the Experience DB.
-
-    Represents a single execution cycle: task description, code generated,
-    execution result, and Judge evaluation.
-    """
-
-    # Task description (used for semantic search)
-    task_description: str
-
-    # Execution result
-    success: bool
-
-    # Code that was generated
-    code_snippet: str
-
-    # Error information (if failed)
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-
-    # Judge evaluation
-    judge_verdict: str  # "PASS", "REVISE", "ESCALATE"
-    judge_score: int = 0  # 0-100
-    judge_feedback: Optional[str] = None
-
-    # Execution metadata
-    execution_plan: Optional[Dict[str, Any]] = None
-    tokens_saved: int = 0  # Symbol extraction token savings
-
-    # Categorization
-    task_type: str = TaskType.UNKNOWN.value
-
-    # Timing
-    timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
-    duration_sec: float = 0.0
-
-    # Pattern metadata
-    techniques_used: List[str] = field(default_factory=list)
-    skills_applied: List[str] = field(default_factory=list)
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return asdict(self)
@@ -471,20 +430,6 @@ class ExperienceDB:
         self._persist()
 
         logger.info("Cleared Experience DB")
-        """Clear all experiences (for testing)"""
-        self._ensure_initialized()
-
-        import numpy as np
-
-        self.experiences = []
-        self.index = faiss.IndexFlatL2(self.dimension)
-        self._success_by_task_type = {}
-        self._failure_by_error_type = {}
-
-        self._persist()
-
-        logger.info("Cleared Experience DB")
-
 
 # Global singleton instance
 _experience_db: Optional[ExperienceDB] = None

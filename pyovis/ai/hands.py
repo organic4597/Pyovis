@@ -135,7 +135,7 @@ class Hands:
             return TaskType.CLI_TOOL.value
         elif "refactor" in desc_lower or "리팩터" in desc_lower:
             return TaskType.REFACTOR.value
-        elif "debug" in desc_lower or "수정" in desc_lower or "에러" in desc_lower:
+        elif "debug" in desc_lower or "bug" in desc_lower or "fix" in desc_lower or "수정" in desc_lower or "에러" in desc_lower:
             return TaskType.DEBUG.value
         else:
             return TaskType.PYTHON_SCRIPT.value

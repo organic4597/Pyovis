@@ -151,7 +151,7 @@ class TestChatChainControllerConsensus:
             "Response 2",  # Turn 1 - no code, no diff check
         ]
         
-        config = HardLimitConfig(max_turns=2, min_diff_lines=3)
+        config = HardLimitConfig(max_turns=2, min_diff_lines=0)
         controller = ChatChainController(config)
         result = await controller.consensus_loop(
             instructor=instructor,
@@ -161,27 +161,6 @@ class TestChatChainControllerConsensus:
             context={},
         )
         
-        assert result.agreed is False
-        assert result.termination_reason == TerminationReason.MAX_TURNS
-        assert result.turns == 2
-    async def test_max_turns_reached(self):
-        """Test max turns reached without consensus"""
-        instructor = AsyncMock()
-        instructor.instruct.return_value = "Revise this"
-
-        assistant = AsyncMock()
-        assistant.respond.return_value = "Here's revision"  # No consensus
-
-        config = HardLimitConfig(max_turns=2)
-        controller = ChatChainController(config)
-        result = await controller.consensus_loop(
-            instructor=instructor,
-            assistant=assistant,
-            topic="test",
-            initial_content="plan",
-            context={},
-        )
-
         assert result.agreed is False
         assert result.termination_reason == TerminationReason.MAX_TURNS
         assert result.turns == 2

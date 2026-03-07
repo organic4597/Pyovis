@@ -172,7 +172,7 @@ class ChatChainController:
             if "[CONSENSUS]" in asst_output:
                 # Sycophancy check
                 current_content = self._extract_content(asst_output)
-                if self._has_code(current_content) and not self._ast_valid(
+                if self._has_code(asst_output) and not self._ast_valid(
                     current_content
                 ):
                     if immediate_consensus or turn == 0:
@@ -192,49 +192,9 @@ class ChatChainController:
                     turns=turn + 1,
                     termination_reason=TerminationReason.CONSENSUS,
                 )
-        # ── Hard Limit 2: AST parse error monitoring ─────────
-        # Check AST errors FIRST (higher severity)
-        current_content = self._extract_content(asst_output)
-        if self._has_code(current_content):
-            ast_valid = self._ast_valid(current_content)
-            if not ast_valid:
-                ast_error_count += 1
-                if ast_error_count >= self.config.max_ast_errors:
-                    return ConsensusResult(
-                        agreed=False,
-                        final_content=asst_output,
-                        messages=messages,
-                        turns=turn + 1,
-                        termination_reason=TerminationReason.HARD_LIMIT_AST,
-                        hard_limit_triggered="ast_error_repeat",
-                    )
-        
-        # ── Hard Limit 1: Diff change monitoring ─────────────
-        diff_lines = self._count_diff_lines(prev_content, current_content)
-        if turn > 0 and diff_lines < self.config.min_diff_lines:
-            return ConsensusResult(
-                agreed=False,
-                final_content=asst_output,
-                messages=messages,
-                turns=turn + 1,
-                termination_reason=TerminationReason.HARD_LIMIT_DIFF,
-                hard_limit_triggered="diff_too_small",
-            )
-            # ── Hard Limit 1: Diff change monitoring ─────────────
-            current_content = self._extract_content(asst_output)
-            diff_lines = self._count_diff_lines(prev_content, current_content)
-            if turn > 0 and diff_lines < self.config.min_diff_lines:
-                return ConsensusResult(
-                    agreed=False,
-                    final_content=asst_output,
-                    messages=messages,
-                    turns=turn + 1,
-                    termination_reason=TerminationReason.HARD_LIMIT_DIFF,
-                    hard_limit_triggered="diff_too_small",
-                )
-
             # ── Hard Limit 2: AST parse error monitoring ─────────
-            if self._has_code(current_content):
+            current_content = self._extract_content(asst_output)
+            if self._has_code(asst_output):  # Check raw text for markers
                 ast_valid = self._ast_valid(current_content)
                 if not ast_valid:
                     ast_error_count += 1
@@ -250,6 +210,18 @@ class ChatChainController:
                     prev_had_ast_error = True
                 else:
                     prev_had_ast_error = False
+
+            # ── Hard Limit 1: Diff change monitoring ─────────────
+            diff_lines = self._count_diff_lines(prev_content, current_content)
+            if turn > 0 and diff_lines < self.config.min_diff_lines:
+                return ConsensusResult(
+                    agreed=False,
+                    final_content=asst_output,
+                    messages=messages,
+                    turns=turn + 1,
+                    termination_reason=TerminationReason.HARD_LIMIT_DIFF,
+                    hard_limit_triggered="diff_too_small",
+                )
 
             # Track for sycophancy detection
             immediate_consensus = False
@@ -310,15 +282,6 @@ class ChatChainController:
             return True
         except SyntaxError:
             return False
-        """Check if code is valid Python AST"""
-        code_block = self._extract_code_block(code)
-        if not code_block:
-            return True  # No code to validate
-        try:
-            ast.parse(code_block)
-            return True
-        except SyntaxError:
-            return False
 
     def _extract_code_block(self, text: str) -> Optional[str]:
         """Extract Python code block from text"""
@@ -326,9 +289,6 @@ class ChatChainController:
         if match:
             return match.group(1).strip()
         return None
-        """Extract Python code block from text"""
-        match = re.search(r"```python\n(.*?)```", text, re.DOTALL)
-        return match.group(1) if match else None
 
     def _has_code(self, text: str) -> bool:
         """Check if text contains Python code"""

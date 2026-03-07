@@ -13,6 +13,7 @@ References: PHASE4_PLAN.md section 4.5
 
 import pytest
 import asyncio
+import sys
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from dataclasses import dataclass, field
 
@@ -81,7 +82,7 @@ class TestExperienceDB:
         with patch("pyovis.memory.experience_db._EXPERIENCE_PERSIST_DIR"):
             db = ExperienceDB()
             db._initialized = True
-            import faiss
+            faiss = pytest.importorskip("faiss")
             import numpy as np
 
             db.index = faiss.IndexFlatL2(384)
@@ -108,7 +109,7 @@ class TestExperienceDB:
         with patch("pyovis.memory.experience_db._EXPERIENCE_PERSIST_DIR"):
             db = ExperienceDB()
             db._initialized = True
-            import faiss
+            faiss = pytest.importorskip("faiss")
             import numpy as np
 
             db.index = faiss.IndexFlatL2(384)
@@ -147,7 +148,7 @@ class TestExperienceDB:
         with patch("pyovis.memory.experience_db._EXPERIENCE_PERSIST_DIR"):
             db = ExperienceDB()
             db._initialized = True
-            import faiss
+            faiss = pytest.importorskip("faiss")
             import numpy as np
 
             db.index = faiss.IndexFlatL2(384)
@@ -176,7 +177,7 @@ class TestExperienceDB:
         with patch("pyovis.memory.experience_db._EXPERIENCE_PERSIST_DIR"):
             db = ExperienceDB()
             db._initialized = True
-            import faiss
+            faiss = pytest.importorskip("faiss")
             import numpy as np
 
             db.index = faiss.IndexFlatL2(384)
@@ -204,7 +205,7 @@ class TestExperienceDB:
         with patch("pyovis.memory.experience_db._EXPERIENCE_PERSIST_DIR"):
             db = ExperienceDB()
             db._initialized = True
-            import faiss
+            faiss = pytest.importorskip("faiss")
             import numpy as np
 
             db.index = faiss.IndexFlatL2(384)
@@ -416,7 +417,9 @@ class TestCriticRunnerIntegration:
     async def test_critic_runner_execute_simple(self):
         """Test basic execution without plan"""
         # This test would require Docker, so we mock it
-        with patch("docker.from_env"):
+        mock_docker = MagicMock()
+        sys.modules["docker"] = mock_docker
+        try:
             critic = CriticRunner()
 
             # Mock the execute method
@@ -430,6 +433,8 @@ class TestCriticRunnerIntegration:
 
                 result = await critic.execute("print('hello')")
                 assert result.exit_code == 0
+        finally:
+            sys.modules.pop("docker", None)
 
 
 # ============================================================================

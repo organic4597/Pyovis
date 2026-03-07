@@ -124,21 +124,8 @@ class TestSwapManagerConfig:
         assert cfg.ctx_size_judge == 16384    # v5.1 reduced
         assert cfg.ctx_size_hands_normal == 32768  # v5.1: symbol extraction success mode
         assert cfg.ctx_size_hands_fallback == 58368  # v5.1: fallback mode
-        # Backward compatibility
-        assert cfg.ctx_size_hands == 80000
-    def test_ctx_size_for_each_role(self):
-        from pyovis.ai.swap_manager import SwapManagerConfig
-        cfg = SwapManagerConfig()
-        assert cfg.ctx_size_planner == 32768  # v5.1 reduced
-        assert cfg.ctx_size_brain == 32768    # v5.1 reduced
-        assert cfg.ctx_size_judge == 16384    # v5.1 reduced
-        # Backward compatibility
-        assert cfg.ctx_size_hands == 80000
-        cfg = SwapManagerConfig()
-        assert cfg.ctx_size_planner == 65536
-        assert cfg.ctx_size_brain == 40960  # Model limit: Qwen3-14B trained on 40K
-        assert cfg.ctx_size_hands == 80000
-        assert cfg.ctx_size_judge == 65536
+        # Backward compatibility alias
+        assert cfg.ctx_size_hands == 16384
 
     def test_default_ngl(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
@@ -155,12 +142,6 @@ class TestSwapManagerConfig:
         assert cfg.cache_type_k_hands_normal == "q8_0"  # v5.1
         assert cfg.cache_type_k_hands_fallback == "q4_0"  # v5.1
         # Backward compatibility
-        assert cfg.cache_type_k_brain == "q4_0"
-        assert cfg.cache_type_v_brain == "q4_0"
-        from pyovis.ai.swap_manager import SwapManagerConfig
-        cfg = SwapManagerConfig()
-        assert cfg.cache_type_k == "q8_0"
-        assert cfg.cache_type_v == "q8_0"
         assert cfg.cache_type_k_brain == "q4_0"
         assert cfg.cache_type_v_brain == "q4_0"
 
@@ -201,12 +182,10 @@ class TestSwapManagerRoleParams:
         assert mgr._ctx_size_for_role(ModelRole.PLANNER) == 32768  # v5.1
         assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 32768    # v5.1
         assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 16384    # v5.1
-        # HANDS uses dual mode
+        # HANDS uses dual mode via config, _ctx_size_for_role returns ctx_size_hands
         assert mgr.config.ctx_size_hands_normal == 32768
         assert mgr.config.ctx_size_hands_fallback == 58368
-        assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 40960
-        assert mgr._ctx_size_for_role(ModelRole.HANDS) == 80000
-        assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 65536
+        assert mgr._ctx_size_for_role(ModelRole.HANDS) == 16384  # backward compat field
 
     def test_ngl_for_each_role(self):
         from pyovis.ai.swap_manager import ModelSwapManager, SwapManagerConfig
@@ -232,6 +211,7 @@ class TestSwapManagerFallback:
 
         mgr = ModelSwapManager.__new__(ModelSwapManager)
         mgr.config = SwapManagerConfig()
+        mgr.config.models["planner"] = "/pyovis_memory/models/NonExistent-Model.gguf"
         mgr._current_role = None
         mgr._process = None
         mgr._swap_count = 0
@@ -244,7 +224,7 @@ class TestSwapManagerFallback:
 
             def path_init(p):
                 m = MagicMock()
-                m.exists.return_value = p.endswith("Qwen3-14B-Q5_K_M.gguf")
+                m.exists.return_value = not p.endswith("NonExistent-Model.gguf")
                 m.__str__ = lambda self: p
                 m.mkdir = MagicMock()
                 m.parent = MagicMock()
