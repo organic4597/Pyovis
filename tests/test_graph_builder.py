@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
-import pytest
+import importlib
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+pytest = importlib.import_module("pytest")
 
 from pyovis.memory.graph_builder import chunk_text, KnowledgeGraphBuilder
 
@@ -11,6 +13,7 @@ from pyovis.memory.graph_builder import chunk_text, KnowledgeGraphBuilder
 # ---------------------------------------------------------------------------
 # chunk_text
 # ---------------------------------------------------------------------------
+
 
 class TestChunkText:
     def test_short_text_single_chunk(self):
@@ -45,6 +48,7 @@ class TestChunkText:
 # _parse_json_array
 # ---------------------------------------------------------------------------
 
+
 class TestParseJsonArray:
     def test_valid_array(self):
         text = '[{"a": 1}, {"b": 2}]'
@@ -68,6 +72,7 @@ class TestParseJsonArray:
 # ---------------------------------------------------------------------------
 # _keyword_extract
 # ---------------------------------------------------------------------------
+
 
 class TestKeywordExtract:
     def test_filters_stop_words(self):
@@ -97,6 +102,7 @@ class TestKeywordExtract:
 # Fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def builder(tmp_path: Path) -> KnowledgeGraphBuilder:
     return KnowledgeGraphBuilder(
@@ -116,17 +122,58 @@ def populated_builder(tmp_path: Path) -> KnowledgeGraphBuilder:
     b._graph = {
         "nodes": {
             "python": {"category": "technology", "importance": 5, "sources": ["doc1"]},
-            "machine learning": {"category": "concept", "importance": 4, "sources": ["doc1"]},
-            "neural network": {"category": "concept", "importance": 3, "sources": ["doc1"]},
-            "tensorflow": {"category": "technology", "importance": 3, "sources": ["doc2"]},
-            "data science": {"category": "concept", "importance": 2, "sources": ["doc2"]},
+            "machine learning": {
+                "category": "concept",
+                "importance": 4,
+                "sources": ["doc1"],
+            },
+            "neural network": {
+                "category": "concept",
+                "importance": 3,
+                "sources": ["doc1"],
+            },
+            "tensorflow": {
+                "category": "technology",
+                "importance": 3,
+                "sources": ["doc2"],
+            },
+            "data science": {
+                "category": "concept",
+                "importance": 2,
+                "sources": ["doc2"],
+            },
         },
         "edges": [
-            {"source": "python", "target": "machine learning", "relation": "used for", "origin": "doc1"},
-            {"source": "machine learning", "target": "neural network", "relation": "includes", "origin": "doc1"},
-            {"source": "tensorflow", "target": "neural network", "relation": "implements", "origin": "doc2"},
-            {"source": "python", "target": "tensorflow", "relation": "runs", "origin": "doc2"},
-            {"source": "data science", "target": "python", "relation": "uses", "origin": "doc2"},
+            {
+                "source": "python",
+                "target": "machine learning",
+                "relation": "used for",
+                "origin": "doc1",
+            },
+            {
+                "source": "machine learning",
+                "target": "neural network",
+                "relation": "includes",
+                "origin": "doc1",
+            },
+            {
+                "source": "tensorflow",
+                "target": "neural network",
+                "relation": "implements",
+                "origin": "doc2",
+            },
+            {
+                "source": "python",
+                "target": "tensorflow",
+                "relation": "runs",
+                "origin": "doc2",
+            },
+            {
+                "source": "data science",
+                "target": "python",
+                "relation": "uses",
+                "origin": "doc2",
+            },
         ],
         "communities": {},
         "community_summaries": {},
@@ -137,6 +184,7 @@ def populated_builder(tmp_path: Path) -> KnowledgeGraphBuilder:
 # ---------------------------------------------------------------------------
 # get_stats
 # ---------------------------------------------------------------------------
+
 
 class TestGetStats:
     def test_empty_graph(self, builder: KnowledgeGraphBuilder):
@@ -150,11 +198,13 @@ class TestGetStats:
         stats = populated_builder.get_stats()
         assert stats["total_nodes"] == 5
         assert stats["total_edges"] == 5
+        assert stats["total_code_symbols"] == 0
 
 
 # ---------------------------------------------------------------------------
 # query_neighbors
 # ---------------------------------------------------------------------------
+
 
 class TestQueryNeighbors:
     def test_missing_entity_returns_center_only(self, builder: KnowledgeGraphBuilder):
@@ -180,6 +230,7 @@ class TestQueryNeighbors:
 # to_networkx
 # ---------------------------------------------------------------------------
 
+
 class TestToNetworkx:
     def test_empty_graph(self, builder: KnowledgeGraphBuilder):
         G = builder.to_networkx()
@@ -197,6 +248,7 @@ class TestToNetworkx:
 # ---------------------------------------------------------------------------
 # detect_communities
 # ---------------------------------------------------------------------------
+
 
 class TestDetectCommunities:
     def test_empty_graph(self, builder: KnowledgeGraphBuilder):
@@ -221,11 +273,14 @@ class TestDetectCommunities:
 # Async: extract_triplets
 # ---------------------------------------------------------------------------
 
+
 class TestExtractTriplets:
     @pytest.mark.asyncio
     async def test_valid_response(self, builder: KnowledgeGraphBuilder):
         mock_response = '[{"node_1": "python", "node_2": "ml", "edge": "used for"}]'
-        with patch.object(builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await builder.extract_triplets("Python is used for ML")
         assert len(result) == 1
         assert result[0]["node_1"] == "python"
@@ -233,8 +288,12 @@ class TestExtractTriplets:
 
     @pytest.mark.asyncio
     async def test_filters_invalid_entries(self, builder: KnowledgeGraphBuilder):
-        mock_response = '[{"node_1": "a", "node_2": "b", "edge": "c"}, {"bad": "entry"}]'
-        with patch.object(builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
+        mock_response = (
+            '[{"node_1": "a", "node_2": "b", "edge": "c"}, {"bad": "entry"}]'
+        )
+        with patch.object(
+            builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await builder.extract_triplets("test")
         assert len(result) == 1
 
@@ -243,11 +302,16 @@ class TestExtractTriplets:
 # Async: extract_concepts
 # ---------------------------------------------------------------------------
 
+
 class TestExtractConcepts:
     @pytest.mark.asyncio
     async def test_valid_response(self, builder: KnowledgeGraphBuilder):
-        mock_response = '[{"entity": "python", "category": "technology", "importance": 5}]'
-        with patch.object(builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
+        mock_response = (
+            '[{"entity": "python", "category": "technology", "importance": 5}]'
+        )
+        with patch.object(
+            builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await builder.extract_concepts("Python programming")
         assert len(result) == 1
         assert result[0]["entity"] == "python"
@@ -255,7 +319,9 @@ class TestExtractConcepts:
     @pytest.mark.asyncio
     async def test_filters_invalid(self, builder: KnowledgeGraphBuilder):
         mock_response = '[{"entity": "valid"}, {"no_entity": true}]'
-        with patch.object(builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            builder, "_call_llm", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await builder.extract_concepts("test")
         assert len(result) == 1
 
@@ -264,13 +330,18 @@ class TestExtractConcepts:
 # Async: add_text
 # ---------------------------------------------------------------------------
 
+
 class TestAddText:
     @pytest.mark.asyncio
     async def test_adds_nodes_and_edges(self, builder: KnowledgeGraphBuilder):
-        with patch.object(builder, "extract_triplets", new_callable=AsyncMock) as mock_t, \
-             patch.object(builder, "extract_concepts", new_callable=AsyncMock) as mock_c:
+        with (
+            patch.object(builder, "extract_triplets", new_callable=AsyncMock) as mock_t,
+            patch.object(builder, "extract_concepts", new_callable=AsyncMock) as mock_c,
+        ):
             mock_t.return_value = [{"node_1": "a", "node_2": "b", "edge": "relates"}]
-            mock_c.return_value = [{"entity": "a", "category": "concept", "importance": 3}]
+            mock_c.return_value = [
+                {"entity": "a", "category": "concept", "importance": 3}
+            ]
             result = await builder.add_text("test text", source="src1")
 
         assert result["added_nodes"] >= 1
@@ -280,9 +351,15 @@ class TestAddText:
 
     @pytest.mark.asyncio
     async def test_source_tracked(self, builder: KnowledgeGraphBuilder):
-        with patch.object(builder, "extract_triplets", new_callable=AsyncMock, return_value=[]), \
-             patch.object(builder, "extract_concepts", new_callable=AsyncMock) as mock_c:
-            mock_c.return_value = [{"entity": "x", "category": "other", "importance": 1}]
+        with (
+            patch.object(
+                builder, "extract_triplets", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(builder, "extract_concepts", new_callable=AsyncMock) as mock_c,
+        ):
+            mock_c.return_value = [
+                {"entity": "x", "category": "other", "importance": 1}
+            ]
             await builder.add_text("text", source="mysource")
 
         assert "mysource" in builder._graph["nodes"]["x"]["sources"]
@@ -291,6 +368,7 @@ class TestAddText:
 # ---------------------------------------------------------------------------
 # Async: add_document
 # ---------------------------------------------------------------------------
+
 
 class TestAddDocument:
     @pytest.mark.asyncio
@@ -305,15 +383,145 @@ class TestAddDocument:
         assert result["added_edges"] == 1 * mock_add.call_count
 
 
+class TestAddTriplet:
+    @pytest.mark.asyncio
+    async def test_add_triplet_dedupes_edges(self, builder: KnowledgeGraphBuilder):
+        first = await builder.add_triplet("Task_A", "verdict", "PASS", origin="judge")
+        second = await builder.add_triplet("Task_A", "verdict", "PASS", origin="judge")
+
+        assert first["added_edges"] == 1
+        assert second["added_edges"] == 0
+        assert len(builder._graph["edges"]) == 1
+
+
+class TestCodeSymbolGraph:
+    @pytest.mark.asyncio
+    async def test_add_code_symbols_persists_symbols_and_edges(
+        self, builder: KnowledgeGraphBuilder
+    ):
+        code = """
+class Service:
+    def run(self):
+        pass
+
+async def fetch_data(url: str) -> str:
+    return url
+
+MAX_RETRIES = 3
+"""
+        result = await builder.add_code_symbols(
+            code, file_path="service.py", source="task:test"
+        )
+
+        assert result["modules"] == 1
+        assert result["symbols"] >= 4
+        assert result["edges"] >= 4
+        assert "module:service.py" in builder._graph["code_modules"]
+        assert any(
+            symbol["name"] == "Service"
+            for symbol in builder._graph["code_symbols"].values()
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_code_symbols_uses_neo4j_mirror_when_present(
+        self, tmp_path: Path
+    ):
+        mirror = Mock()
+        builder = KnowledgeGraphBuilder(
+            persist_path=tmp_path / "graph.json",
+            llm_base="http://test:8001",
+            model="test",
+            neo4j_mirror=mirror,
+        )
+
+        await builder.add_code_symbols(
+            "def run():\n    return 1\n", file_path="job.py", source="task:test"
+        )
+
+        mirror.mirror_code_graph.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_add_triplet_uses_neo4j_mirror_when_present(self, tmp_path: Path):
+        mirror = Mock()
+        builder = KnowledgeGraphBuilder(
+            persist_path=tmp_path / "graph.json",
+            llm_base="http://test:8001",
+            model="test",
+            neo4j_mirror=mirror,
+        )
+
+        await builder.add_triplet("task_1", "verdict", "PASS", origin="judge")
+
+        mirror.mirror_triplet.assert_called_once_with(
+            "task_1", "verdict", "pass", origin="judge"
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_graph_rag_includes_code_results(
+        self, builder: KnowledgeGraphBuilder
+    ):
+        await builder.add_code_symbols(
+            "def fetch_user():\n    return {}\n", file_path="api.py", source="task:test"
+        )
+
+        result = await builder.query_graph_rag("fetch_user", use_llm_extraction=False)
+
+        assert "code_results" in result
+        assert result["code_results"]["nodes"]
+        assert "Relevant code symbols" in result["context_text"]
+
+    def test_to_networkx_includes_code_graph(self, builder: KnowledgeGraphBuilder):
+        builder._graph["code_modules"]["module:api.py"] = {
+            "id": "module:api.py",
+            "file_path": "api.py",
+            "language": "python",
+            "source": "task:test",
+        }
+        builder._graph["code_symbols"]["symbol:api.py:fetch_user"] = {
+            "id": "symbol:api.py:fetch_user",
+            "name": "fetch_user",
+            "qualified_name": "api.py:fetch_user",
+            "kind": "function",
+            "file_path": "api.py",
+            "line": 0,
+            "parent": None,
+            "signature": "()",
+            "return_type": "",
+            "description": "",
+            "is_async": False,
+            "external": False,
+            "source": "task:test",
+        }
+        builder._graph["code_symbol_edges"].append(
+            {
+                "source": "module:api.py",
+                "target": "symbol:api.py:fetch_user",
+                "relation": "defines",
+                "origin": "task:test",
+                "line": 0,
+            }
+        )
+
+        graph = builder.to_networkx()
+
+        assert graph.has_node("module:api.py")
+        assert graph.has_node("symbol:api.py:fetch_user")
+        assert graph.has_edge("module:api.py", "symbol:api.py:fetch_user")
+
+
 # ---------------------------------------------------------------------------
 # Async: query_graph_rag
 # ---------------------------------------------------------------------------
 
+
 class TestQueryGraphRag:
     @pytest.mark.asyncio
-    async def test_returns_structured_context(self, populated_builder: KnowledgeGraphBuilder):
+    async def test_returns_structured_context(
+        self, populated_builder: KnowledgeGraphBuilder
+    ):
         result = await populated_builder.query_graph_rag(
-            "Tell me about python programming", use_llm_extraction=False,
+            "Tell me about python programming",
+            use_llm_extraction=False,
         )
         assert "entities" in result
         assert "relations" in result
@@ -329,11 +537,14 @@ class TestQueryGraphRag:
         assert result["context_text"] == ""
 
     @pytest.mark.asyncio
-    async def test_with_community_summaries(self, populated_builder: KnowledgeGraphBuilder):
+    async def test_with_community_summaries(
+        self, populated_builder: KnowledgeGraphBuilder
+    ):
         populated_builder.detect_communities()
         populated_builder._graph["community_summaries"] = {"0": "A tech community."}
         result = await populated_builder.query_graph_rag(
-            "python", use_llm_extraction=False,
+            "python",
+            use_llm_extraction=False,
         )
         assert isinstance(result["community_summaries"], list)
 
@@ -342,15 +553,19 @@ class TestQueryGraphRag:
 # Async: hybrid_search
 # ---------------------------------------------------------------------------
 
+
 class TestHybridSearch:
     @pytest.mark.asyncio
-    async def test_combines_vector_and_graph(self, populated_builder: KnowledgeGraphBuilder):
+    async def test_combines_vector_and_graph(
+        self, populated_builder: KnowledgeGraphBuilder
+    ):
         vector_results = [
             {"text": "Python is great", "distance": 0.1, "index": 0},
             {"text": "ML with Python", "distance": 0.2, "index": 1},
         ]
         result = await populated_builder.hybrid_search(
-            "python", vector_results=vector_results,
+            "python",
+            vector_results=vector_results,
         )
         assert "vector_context" in result
         assert "graph_context" in result
@@ -369,6 +584,7 @@ class TestHybridSearch:
 # Async: summarize_communities
 # ---------------------------------------------------------------------------
 
+
 class TestSummarizeCommunities:
     @pytest.mark.asyncio
     async def test_no_communities_returns_empty(self, builder: KnowledgeGraphBuilder):
@@ -379,7 +595,8 @@ class TestSummarizeCommunities:
     async def test_generates_summaries(self, populated_builder: KnowledgeGraphBuilder):
         populated_builder.detect_communities()
         with patch.object(
-            populated_builder, "_call_llm",
+            populated_builder,
+            "_call_llm",
             new_callable=AsyncMock,
             return_value="This community is about technology.",
         ):
@@ -389,10 +606,13 @@ class TestSummarizeCommunities:
         assert "community_summaries" in populated_builder._graph
 
     @pytest.mark.asyncio
-    async def test_llm_failure_uses_fallback(self, populated_builder: KnowledgeGraphBuilder):
+    async def test_llm_failure_uses_fallback(
+        self, populated_builder: KnowledgeGraphBuilder
+    ):
         populated_builder.detect_communities()
         with patch.object(
-            populated_builder, "_call_llm",
+            populated_builder,
+            "_call_llm",
             new_callable=AsyncMock,
             side_effect=Exception("LLM down"),
         ):
@@ -405,23 +625,36 @@ class TestSummarizeCommunities:
 # Persistence
 # ---------------------------------------------------------------------------
 
+
 class TestPersistence:
     def test_save_and_load(self, tmp_path: Path):
         path = tmp_path / "kg" / "graph.json"
-        b1 = KnowledgeGraphBuilder(persist_path=path, llm_base="http://test:8001", model="test")
-        b1._graph["nodes"]["test"] = {"category": "other", "importance": 1, "sources": []}
+        b1 = KnowledgeGraphBuilder(
+            persist_path=path, llm_base="http://test:8001", model="test"
+        )
+        b1._graph["nodes"]["test"] = {
+            "category": "other",
+            "importance": 1,
+            "sources": [],
+        }
         b1._save()
 
-        b2 = KnowledgeGraphBuilder(persist_path=path, llm_base="http://test:8001", model="test")
+        b2 = KnowledgeGraphBuilder(
+            persist_path=path, llm_base="http://test:8001", model="test"
+        )
         assert "test" in b2._graph["nodes"]
 
     def test_load_corrupt_file_returns_empty(self, tmp_path: Path):
         path = tmp_path / "graph.json"
         path.write_text("not json", encoding="utf-8")
-        b = KnowledgeGraphBuilder(persist_path=path, llm_base="http://test:8001", model="test")
+        b = KnowledgeGraphBuilder(
+            persist_path=path, llm_base="http://test:8001", model="test"
+        )
         assert b._graph["nodes"] == {}
 
-    def test_communities_persisted_after_detection(self, tmp_path: Path, populated_builder: KnowledgeGraphBuilder):
+    def test_communities_persisted_after_detection(
+        self, tmp_path: Path, populated_builder: KnowledgeGraphBuilder
+    ):
         populated_builder._persist_path = tmp_path / "g.json"
         populated_builder.detect_communities()
 

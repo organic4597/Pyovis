@@ -8,9 +8,12 @@ All external dependencies (LLM, Docker, filesystem) are mocked.
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+import importlib
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
+
+pytest = importlib.import_module("pytest")
 
 from pyovis.orchestration.loop_controller import (
     LoopContext,
@@ -24,10 +27,12 @@ from pyovis.orchestration.loop_controller import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_ctx(**overrides) -> LoopContext:
-    defaults = dict(task_id="test-001", task_description="Build a hello world script")
-    defaults.update(overrides)
-    return LoopContext(**defaults)
+    ctx = LoopContext(task_id="test-001", task_description="Build a hello world script")
+    for key, value in overrides.items():
+        setattr(ctx, key, value)
+    return ctx
 
 
 def _plan_output():
@@ -98,20 +103,18 @@ def _build_controller(
     hands.revise = AsyncMock(return_value=("print('fixed')", ""))
 
     judge = AsyncMock()
-    judge.evaluate = AsyncMock(
-        return_value=judge_result or FakeJudgeResult()
-    )
+    judge.evaluate = AsyncMock(return_value=judge_result or FakeJudgeResult())
 
     critic = AsyncMock()
-    critic.execute = AsyncMock(
-        return_value=exec_result or FakeExecResult()
-    )
+    critic.execute = AsyncMock(return_value=exec_result or FakeExecResult())
 
     tracker = MagicMock()
     tracker.start = MagicMock()
     tracker.record_switch = MagicMock()
     tracker.finish = MagicMock()
-    tracker.get_record = MagicMock(return_value={"task_id": "test-001", "fail_reasons": []})
+    tracker.get_record = MagicMock(
+        return_value={"task_id": "test-001", "fail_reasons": []}
+    )
 
     skill_manager = MagicMock()
     skill_manager.load_verified = MagicMock(return_value="# No skill")
@@ -137,6 +140,7 @@ def _build_controller(
 # ---------------------------------------------------------------------------
 # Tests — Happy Path
 # ---------------------------------------------------------------------------
+
 
 class TestHappyPath:
     @pytest.mark.asyncio
@@ -183,6 +187,7 @@ class TestHappyPath:
         result = await ctrl.run(ctx)
 
         assert result["status"] == "complete"
+        assert planner is not None
         planner.plan.assert_awaited_once()
         brain.plan.assert_not_awaited()
 
@@ -191,11 +196,14 @@ class TestHappyPath:
 # Tests — REVISE Path
 # ---------------------------------------------------------------------------
 
+
 class TestRevisePath:
     @pytest.mark.asyncio
     async def test_revise_then_pass(self):
         """EVALUATE returns REVISE once, then PASS."""
-        revise_result = FakeJudgeResult(verdict="REVISE", score=75, reason="minor issue")
+        revise_result = FakeJudgeResult(
+            verdict="REVISE", score=75, reason="minor issue"
+        )
         pass_result = FakeJudgeResult(verdict="PASS", score=95, reason="fixed")
 
         ctrl, brain, hands, judge, critic, tracker, sm, _ = _build_controller(
@@ -236,11 +244,14 @@ class TestRevisePath:
 # Tests — ESCALATION Path
 # ---------------------------------------------------------------------------
 
+
 class TestEscalation:
     @pytest.mark.asyncio
     async def test_direct_escalate_verdict(self):
         """Judge returns ESCALATE directly."""
-        escalate_result = FakeJudgeResult(verdict="ESCALATE", score=0, reason="impossible")
+        escalate_result = FakeJudgeResult(
+            verdict="ESCALATE", score=0, reason="impossible"
+        )
 
         ctrl, brain, hands, judge, critic, tracker, sm, _ = _build_controller()
         judge.evaluate = AsyncMock(return_value=escalate_result)
@@ -254,7 +265,9 @@ class TestEscalation:
     @pytest.mark.asyncio
     async def test_consecutive_fails_escalate(self):
         """3 consecutive REVISE → escalation."""
-        revise_result = FakeJudgeResult(verdict="REVISE", score=50, reason="still broken")
+        revise_result = FakeJudgeResult(
+            verdict="REVISE", score=50, reason="still broken"
+        )
 
         ctrl, brain, hands, judge, critic, tracker, sm, _ = _build_controller(
             exec_result=FakeExecResult(
@@ -294,7 +307,9 @@ class TestEscalation:
         new_plan = {
             "action": "revise_plan",
             "new_plan": "# Revised plan",
-            "new_todo": [{"id": 1, "title": "Revised task", "description": "try again"}],
+            "new_todo": [
+                {"id": 1, "title": "Revised task", "description": "try again"}
+            ],
             "new_criteria": {"1": ["new condition"]},
         }
 
@@ -315,6 +330,7 @@ class TestEscalation:
 # ---------------------------------------------------------------------------
 # Tests — Edge Cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     @pytest.mark.asyncio
@@ -354,20 +370,27 @@ class TestEdgeCases:
 # Tests — _check_escalation / _can_self_fix unit tests
 # ---------------------------------------------------------------------------
 
+
 class TestHelperMethods:
     def test_check_escalation_consecutive_fails(self):
         ctrl, *_ = _build_controller()
-        ctx = _make_ctx(consecutive_fails=3, max_consecutive_fails=3, max_loops=10, loop_count=1)
+        ctx = _make_ctx(
+            consecutive_fails=3, max_consecutive_fails=3, max_loops=10, loop_count=1
+        )
         assert ctrl._check_escalation(ctx) == LoopStep.ESCALATE
 
     def test_check_escalation_max_loops(self):
         ctrl, *_ = _build_controller()
-        ctx = _make_ctx(consecutive_fails=1, max_consecutive_fails=3, loop_count=5, max_loops=5)
+        ctx = _make_ctx(
+            consecutive_fails=1, max_consecutive_fails=3, loop_count=5, max_loops=5
+        )
         assert ctrl._check_escalation(ctx) == LoopStep.ESCALATE
 
     def test_check_escalation_continue(self):
         ctrl, *_ = _build_controller()
-        ctx = _make_ctx(consecutive_fails=1, max_consecutive_fails=3, loop_count=2, max_loops=5)
+        ctx = _make_ctx(
+            consecutive_fails=1, max_consecutive_fails=3, loop_count=2, max_loops=5
+        )
         assert ctrl._check_escalation(ctx) == LoopStep.REVISE
 
     def test_can_self_fix_allowed(self):
@@ -400,3 +423,31 @@ class TestHelperMethods:
         assert result["loop_count"] == 5
         assert len(result["fail_reasons"]) == 2
         assert "사람의 판단" in result["message"]
+
+
+class TestCodeSymbolIngestion:
+    @pytest.mark.asyncio
+    async def test_save_current_code_ingests_python_symbols(self):
+        ctrl, *_ = _build_controller()
+        ctrl.file_writer = MagicMock()
+        ctrl.file_writer.save_code = MagicMock(
+            return_value={"path": "/tmp/main.py", "size_bytes": 12}
+        )
+        ctrl.kg_builder = MagicMock()
+        ctrl.kg_builder.add_code_symbols = AsyncMock(
+            return_value={"modules": 1, "symbols": 1, "edges": 1}
+        )
+
+        ctx = _make_ctx()
+        ctx.todo_list = [{"file_path": "main.py"}]
+        ctx.current_task_index = 0
+        ctx.current_code = "def run():\n    return 1\n"
+
+        await ctrl._save_current_code(ctx)
+        await asyncio.sleep(0)  # allow create_task coroutine to run
+
+        ctrl.kg_builder.add_code_symbols.assert_awaited_once_with(
+            "def run():\n    return 1\n",
+            file_path="main.py",
+            source="task:test-001:file:main.py",
+        )

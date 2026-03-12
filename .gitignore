@@ -4,6 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.env
+.telegram_chat_id
 .venv/
 venv/
 ENV/
@@ -14,10 +16,12 @@ build/
 
 # Rust
 /target/
+pyovis_core/target/
 *.rlib
 *.rmeta
 
 # llama.cpp
+llama.cpp/
 llama.cpp/build/
 llama.cpp/main
 llama.cpp/llama-server
@@ -33,6 +37,7 @@ llama.cpp/llama-server
 logs/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 
 # IDE
 .vscode/
@@ -44,6 +49,33 @@ logs/
 # Session files
 session-*.md
 
+# Internal planning and archived docs
+.sisyphus/
+docs_archive/
+ANALYSIS_INDEX.md
+BUG_ANALYSIS_INDEX.md
+DETAILED_FINDINGS.txt
+ESCALATE_BUILD_ANALYSIS.md
+ESCALATION_*.md
+GREETING_CLASSIFICATION_FINDINGS.md
+ISSUE_LIST.md
+QUICK_REFERENCE.txt
+REQUEST_ANALYZER_GREETING_ANALYSIS.md
+TASK_CLASSIFICATION_SUMMARY.md
+TASK_ROUTING_QUICK_REFERENCE.txt
+TASK_TYPES_AND_ROUTING.md
+TASK_TYPES_INDEX.md
+V5_IMPLEMENTATION_AUDIT.md
+V5_QUICK_REFERENCE.txt
+PHASE4_PLAN.md
+PHASE5_COMPLETE.md
+IMPROVEMENTS_PHASE5.md
+boot_summary.txt
+
 # Backup files
 *.bak
+*.bak_*
+*.backup
+*.config_change
+*.ctx_*
 *.orig

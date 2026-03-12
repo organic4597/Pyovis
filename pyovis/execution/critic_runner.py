@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import logging
 import os
-import sys
-import tempfile
-import time
 import shlex
+import subprocess
+import sys
+import time
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Set
+from pathlib import Path
+from typing import Any, Dict, Optional, Set
 
-import importlib
-
-from pyovis.execution.execution_plan import ExecutionPlan, ExecutionType
-
-logger = logging.getLogger(__name__)
+from pyovis.execution.file_writer import WorkspaceManager
+from pyovis.execution.execution_plan import ExecutionType
 
 
 @dataclass
@@ -28,39 +25,48 @@ class ExecutionResult:
 
 
 class CriticRunner:
-    SANDBOX_PATH = "/dev/shm/pyvis_sandbox"
-    # (error_type, stderr_pattern) — 순서 중요: 위쪽이 우선순위 높음
     ERROR_PATTERNS: list[tuple[str, str]] = [
-        # 코드 버그
-        ("type_error",     "TypeError"),
-        ("syntax_error",   "SyntaxError"),
+        ("type_error", "TypeError"),
+        ("syntax_error", "SyntaxError"),
         ("missing_import", "ModuleNotFoundError"),
-        ("name_error",     "NameError"),
-        ("index_error",    "IndexError"),
-        ("key_error",      "KeyError"),
-        ("value_error",    "ValueError"),
-        ("attribute_error","AttributeError"),
-        # 환경 제약 (코드 버그 아님 — Judge가 REVISE 대신 ESCALATE 처리)
-        ("network_error",  "ConnectionRefusedError"),
-        ("network_error",  "NetworkError"),
-        ("network_error",  "network is unreachable"),
-        ("network_error",  "Name or service not known"),
-        ("network_error",  "Connection refused"),
-        ("install_error",  "Could not find a version"),
-        ("install_error",  "No matching distribution"),
-        ("install_error",  "No module named"),  # pip 설치 실패 후 import 실패
-        ("env_error",      "address already in use"),
-        ("env_error",      "No space left on device"),
-        ("env_error",      "Permission denied"),
+        ("name_error", "NameError"),
+        ("index_error", "IndexError"),
+        ("key_error", "KeyError"),
+        ("value_error", "ValueError"),
+        ("attribute_error", "AttributeError"),
+        ("network_error", "ConnectionRefusedError"),
+        ("network_error", "NetworkError"),
+        ("network_error", "network is unreachable"),
+        ("network_error", "Name or service not known"),
+        ("network_error", "Connection refused"),
+        ("install_error", "Could not find a version"),
+        ("install_error", "No matching distribution"),
+        ("install_error", "No module named"),
+        ("env_error", "address already in use"),
+        ("env_error", "No space left on device"),
+        ("env_error", "Permission denied"),
     ]
-    # Dockerfile에 이미 설치된 패키지 (설치 불필요)
+
     _PREINSTALLED: Set[str] = {
-        "requests", "pydantic", "fastapi", "httpx",
-        "numpy", "pillow", "PIL", "matplotlib", "pandas",
-        "scipy", "pygame", "pytest", "colorama", "click", "rich",
-        "OpenGL", "PyOpenGL",
+        "requests",
+        "pydantic",
+        "fastapi",
+        "httpx",
+        "numpy",
+        "pillow",
+        "PIL",
+        "matplotlib",
+        "pandas",
+        "scipy",
+        "pygame",
+        "pytest",
+        "colorama",
+        "click",
+        "rich",
+        "OpenGL",
+        "PyOpenGL",
     }
-    # import명 → 실제 pip 패키지명 매핑
+
     _IMPORT_TO_PIP: Dict[str, str] = {
         "OpenGL": "PyOpenGL",
         "cv2": "opencv-python-headless",
@@ -87,29 +93,95 @@ class CriticRunner:
         "usb": "pyusb",
         "websocket": "websocket-client",
     }
-    # Python 표준 라이브러리 최상위 모듈 (설치 불필요)
-    _STDLIB: Set[str] = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else {
-        "os", "sys", "re", "io", "abc", "ast", "json", "math", "time",
-        "random", "string", "struct", "socket", "threading", "subprocess",
-        "pathlib", "functools", "itertools", "collections", "contextlib",
-        "dataclasses", "enum", "copy", "typing", "types", "weakref",
-        "hashlib", "hmac", "base64", "uuid", "datetime", "calendar",
-        "logging", "warnings", "traceback", "inspect", "importlib",
-        "unittest", "tempfile", "shutil", "glob", "fnmatch", "stat",
-        "csv", "configparser", "argparse", "textwrap", "html", "http",
-        "urllib", "email", "xml", "zipfile", "tarfile", "gzip",
-        "queue", "heapq", "bisect", "array", "mmap", "signal",
-        "ctypes", "platform", "gc", "dis", "code", "codeop",
-        "builtins", "__future__",
-    }
 
-    def __init__(self) -> None:
-        docker = importlib.import_module("docker")
-        self.client = docker.from_env()
-        os.makedirs(self.SANDBOX_PATH, exist_ok=True)
+    _STDLIB: Set[str] = (
+        set(sys.stdlib_module_names)
+        if hasattr(sys, "stdlib_module_names")
+        else {
+            "os",
+            "sys",
+            "re",
+            "io",
+            "abc",
+            "ast",
+            "json",
+            "math",
+            "time",
+            "random",
+            "string",
+            "struct",
+            "socket",
+            "threading",
+            "subprocess",
+            "pathlib",
+            "functools",
+            "itertools",
+            "collections",
+            "contextlib",
+            "dataclasses",
+            "enum",
+            "copy",
+            "typing",
+            "types",
+            "weakref",
+            "hashlib",
+            "hmac",
+            "base64",
+            "uuid",
+            "datetime",
+            "calendar",
+            "logging",
+            "warnings",
+            "traceback",
+            "inspect",
+            "importlib",
+            "unittest",
+            "tempfile",
+            "shutil",
+            "glob",
+            "fnmatch",
+            "stat",
+            "csv",
+            "configparser",
+            "argparse",
+            "textwrap",
+            "html",
+            "http",
+            "urllib",
+            "email",
+            "xml",
+            "zipfile",
+            "tarfile",
+            "gzip",
+            "queue",
+            "heapq",
+            "bisect",
+            "array",
+            "mmap",
+            "signal",
+            "ctypes",
+            "platform",
+            "gc",
+            "dis",
+            "code",
+            "codeop",
+            "builtins",
+            "__future__",
+        }
+    )
+
+    def __init__(self, workspace: WorkspaceManager | None = None) -> None:
+        self.workspace = workspace
+
+    def _require_workspace(
+        self, workspace: WorkspaceManager | None = None
+    ) -> WorkspaceManager:
+        effective_workspace = workspace or self.workspace
+        if effective_workspace is None:
+            raise RuntimeError("CriticRunner requires a WorkspaceManager")
+        return effective_workspace
 
     def _extract_third_party_imports(self, code: str) -> list[str]:
-        """AST로 코드에서 import된 외부 패키지 목록을 추출합니다."""
         try:
             tree = ast.parse(code)
         except SyntaxError:
@@ -124,71 +196,173 @@ class CriticRunner:
                 if node.module:
                     top_level.add(node.module.split(".")[0])
 
-        # 표준 라이브러리 + 이미 설치된 패키지 제외
-        third_party = [
-            pkg for pkg in sorted(top_level)
-            if pkg not in self._STDLIB and pkg not in self._PREINSTALLED
+        return [
+            pkg
+            for pkg in sorted(top_level)
+            if pkg not in self._STDLIB
+            and pkg not in self._PREINSTALLED
             and not pkg.startswith("_")
         ]
-        return third_party
+
     def _cmds_to_pkg_names(self, setup_commands: list[str]) -> list[str]:
-        """setup_commands (\'pip install X\' 형식) 리스트에서 패키지명만 추출합니다."""
         result: list[str] = []
         for cmd in setup_commands:
-            # \'pip install pkg1 pkg2\' 형식 또는 \'pkg1 pkg2\' 등 다양한 형태 지원
             stripped = cmd.strip()
             if stripped.startswith("pip install "):
-                stripped = stripped[len("pip install "):].strip()
+                stripped = stripped[len("pip install ") :].strip()
             parts = stripped.split()
             result.extend(p for p in parts if p and not p.startswith("-"))
         return result
 
+    def _ensure_venv(
+        self, workspace: WorkspaceManager | None = None
+    ) -> tuple[WorkspaceManager, Path, Path]:
+        workspace = self._require_workspace(workspace)
+        workspace.create_project()
+        workspace.mark_incomplete()
+        workspace.create_venv()
+        python_bin = workspace.get_venv_python()
+        pip_bin = workspace.get_venv_pip()
+        if not python_bin.exists() or not pip_bin.exists():
+            raise RuntimeError(f"venv 생성 실패: {workspace.get_venv_path()}")
+        return workspace, python_bin, pip_bin
 
-    def _install_dependencies_sync(self, packages: list[str], timeout: int = 60) -> None:
-        """sandbox 볼륨(/workspace/.pylibs)에 pip install --target으로 패키지를 설치합니다.
+    def _workspace_env(
+        self, allow_network: bool, workspace: WorkspaceManager | None = None
+    ) -> dict[str, str]:
+        workspace = self._require_workspace(workspace)
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYOVIS_ALLOW_NETWORK"] = "1" if allow_network else "0"
+        env["VIRTUAL_ENV"] = str(workspace.get_venv_path())
+        env["PATH"] = (
+            f"{workspace.get_venv_pip().parent}{os.pathsep}{env.get('PATH', '')}"
+        )
+        return env
 
-        별도 컨테이너에서 설치하더라도 공유 볼륨에 저장되므로
-        이후 실행 컨테이너에서 PYTHONPATH로 참조 가능합니다.
-        """
+    def _install_dependencies_sync(
+        self,
+        packages: list[str],
+        timeout: int = 120,
+        workspace: WorkspaceManager | None = None,
+    ) -> None:
         if not packages:
             return
-        pkg_list = " ".join(packages)
-        # --target으로 공유 볼륨 내 .pylibs에 설치 → 실행 컨테이너에서 PYTHONPATH로 참조
-        cmd = f"pip install --quiet --target /workspace/.pylibs {pkg_list}"
-        logger.info(f"패키지 설치 시작 (→ /workspace/.pylibs): {packages}")
-        # .pylibs 디렉토리 미리 생성 (USER sandbox=uid 1000 권한 문제 방지)
-        pylibs_dir = os.path.join(self.SANDBOX_PATH, ".pylibs")
-        os.makedirs(pylibs_dir, exist_ok=True)
-        os.chmod(pylibs_dir, 0o777)
-        container = None
+
+        workspace = self._require_workspace(workspace)
+        _, _, pip_bin = self._ensure_venv(workspace)
+        cmd = [str(pip_bin), "install", "--quiet", *packages]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=workspace.project_root,
+            env=self._workspace_env(allow_network=True, workspace=workspace),
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or proc.stdout.strip()
+            raise RuntimeError(stderr or f"pip install failed: {' '.join(packages)}")
+
+    def _prepare_workspace_files(
+        self,
+        code: str | dict[str, str],
+        setup_commands: list[str] | None,
+        workspace: WorkspaceManager | None = None,
+    ) -> tuple[Path, list[Path]]:
+        workspace = self._require_workspace(workspace)
+        files = code if isinstance(code, dict) else {"main.py": code}
+        all_source = "\n".join(files.values())
+
+        if setup_commands:
+            pkg_names = self._cmds_to_pkg_names(setup_commands)
+            if pkg_names:
+                self._install_dependencies_sync(pkg_names, workspace=workspace)
+        else:
+            local_modules = {Path(fp).stem for fp in files}
+            third_party = [
+                pkg
+                for pkg in self._extract_third_party_imports(all_source)
+                if pkg not in local_modules
+            ]
+            mapped = [self._IMPORT_TO_PIP.get(p, p) for p in third_party]
+            if mapped:
+                self._install_dependencies_sync(mapped, workspace=workspace)
+
+        written_paths: list[Path] = []
+        for fp, src in files.items():
+            full_path = workspace.write_file(fp, src)
+            written_paths.append(full_path)
+
+        entry_name = None
+        for fp in files:
+            if Path(fp).name == "main.py":
+                entry_name = fp
+                break
+        if entry_name is None:
+            for fp in files:
+                if Path(fp).name == "app.py":
+                    entry_name = fp
+                    break
+        if entry_name is None:
+            entry_name = next(iter(files.keys()))
+
+        return workspace.get_file_path(entry_name), written_paths
+
+    def _run_subprocess(
+        self,
+        cmd: list[str],
+        timeout: int,
+        allow_network: bool,
+        cwd: Path | None = None,
+        workspace: WorkspaceManager | None = None,
+    ) -> ExecutionResult:
+        workspace = self._require_workspace(workspace)
+        start_time = time.time()
         try:
-            container = self.client.containers.run(
-                "pyvis-sandbox:latest",
+            proc = subprocess.run(
                 cmd,
-                volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
-                network_mode="bridge",  # pip install은 네트워크 필요
-                mem_limit="512m",
-                detach=True,
-                remove=False,
-                stdout=True,
-                stderr=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd or workspace.project_root,
+                env=self._workspace_env(
+                    allow_network=allow_network, workspace=workspace
+                ),
             )
-            status = container.wait(timeout=timeout)
-            exit_code = status.get("StatusCode", 0) if isinstance(status, dict) else 0
-            if exit_code != 0:
-                stderr_bytes = container.logs(stdout=False, stderr=True)
-                stderr_text = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
-                logger.warning(f"패키지 설치 실패 (exit={exit_code}): {stderr_text[:300]}")
-            else:
-                logger.info(f"패키지 설치 완료: {packages}")
-        except Exception as e:
-            logger.warning(f"패키지 설치 중 예외: {e}")
-        finally:
-            if container is not None:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
+            elapsed = time.time() - start_time
+            stderr = proc.stderr or ""
+            return ExecutionResult(
+                stdout=proc.stdout or "",
+                stderr=stderr,
+                exit_code=proc.returncode,
+                execution_time=elapsed,
+                error_type=None
+                if proc.returncode == 0
+                else self._classify_error(stderr),
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.time() - start_time
+            stderr = exc.stderr or exc.stdout or ""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            return ExecutionResult(
+                stdout="",
+                stderr=f"timeout_error: 코드 실행이 {timeout}초를 초과했습니다. {stderr}".strip(),
+                exit_code=-1,
+                execution_time=elapsed,
+                error_type="timeout_error",
+            )
+        except Exception as exc:
+            elapsed = time.time() - start_time
+            stderr = str(exc)
+            return ExecutionResult(
+                stdout="",
+                stderr=stderr,
+                exit_code=-1,
+                execution_time=elapsed,
+                error_type=self._classify_error(stderr),
+            )
 
     def _execute_sync(
         self,
@@ -196,190 +370,19 @@ class CriticRunner:
         timeout: int = 30,
         allow_network: bool = False,
         setup_commands: list[str] | None = None,
+        workspace: WorkspaceManager | None = None,
     ) -> ExecutionResult:
-        """Synchronous Docker execution — called via run_in_executor.
-
-        code가 dict인 경우 다중 파일 모드: {file_path: source_code}
-        code가 str인 경우 다단일 파일 모드.
-        """
-        written_files: list[str] = []
-        temp_file: str | None = None
-
-        if isinstance(code, dict):
-            # ── 다중 파일 모드 ──────────────────────────────────────
-            files = code
-            # 로컬 모듈 이름 = dict 키에서 .py 제거
-            local_modules: set[str] = {
-                os.path.splitext(os.path.basename(fp))[0] for fp in files
-            }
-            # 전체 소스에서 외부 패키지 추출 (로컬 모듈 제외)
-            all_source = "\n".join(files.values())
-
-            # setup_commands 우선 사용, 없으면 AST fallback
-            if setup_commands:
-                pkg_names = self._cmds_to_pkg_names(setup_commands)
-                if pkg_names:
-                    self._install_dependencies_sync(pkg_names)
-            else:
-                local_modules: set[str] = {
-                    os.path.splitext(os.path.basename(fp))[0] for fp in files
-                }
-                third_party = [
-                    pkg for pkg in self._extract_third_party_imports(all_source)
-                    if pkg not in local_modules
-                ]
-                mapped = [self._IMPORT_TO_PIP.get(p, p) for p in third_party]
-                if mapped:
-                    self._install_dependencies_sync(mapped)
-
-            # 각 파일을 SANDBOX_PATH에 저장 (서브디렉토리 구조 보존)
-            for fp, src in files.items():
-                dest = os.path.join(self.SANDBOX_PATH, fp)
-                dest_dir = os.path.dirname(dest)
-                if dest_dir != self.SANDBOX_PATH:
-                    os.makedirs(dest_dir, exist_ok=True)
-                with open(dest, "w") as fh:
-                    fh.write(src)
-                os.chmod(dest, 0o644)
-                written_files.append(dest)
-
-            # 진입점 결정: main.py > app.py > 첫 번째 파일 (서브디렉토리 내 포함)
-            entry_name = None
-            for fp in files:
-                base = os.path.basename(fp)
-                if base == "main.py":
-                    entry_name = fp
-                    break
-            if entry_name is None:
-                for fp in files:
-                    base = os.path.basename(fp)
-                    if base == "app.py":
-                        entry_name = fp
-                        break
-            if entry_name is None:
-                entry_name = list(files.keys())[0]
-            run_cmd = "bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & until [ -e /tmp/.X99-lock ]; do sleep 0.05; done && DISPLAY=:99 python /workspace/" + shlex.quote(entry_name) + "'"
-        else:
-            # ── 단일 파일 모드 ──────────────────────────────────────
-
-            # setup_commands 우선 사용, 없으면 AST fallback
-            if setup_commands:
-                pkg_names = self._cmds_to_pkg_names(setup_commands)
-                if pkg_names:
-                    self._install_dependencies_sync(pkg_names)
-            else:
-                third_party = self._extract_third_party_imports(code)
-                mapped = [self._IMPORT_TO_PIP.get(p, p) for p in third_party]
-                if mapped:
-                    self._install_dependencies_sync(mapped)
-
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
-            ) as f:
-                f.write(code)
-                temp_file = f.name
-            os.chmod(temp_file, 0o644)
-            run_cmd = "bash -c 'Xvfb :99 -screen 0 1024x768x24 &>/dev/null & until [ -e /tmp/.X99-lock ]; do sleep 0.05; done && DISPLAY=:99 python /workspace/" + shlex.quote(os.path.basename(temp_file)) + "'"
-
-        container = None
-        start_time = time.time()
-        try:
-            container = self.client.containers.run(
-                "pyvis-sandbox:latest",
-                run_cmd,
-                volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
-                network_mode="none" if not allow_network else "bridge",
-                mem_limit="512m",
-                cpu_quota=100000,
-                detach=True,
-                environment={
-                    "PYTHONUNBUFFERED": "1",
-                    "PYTHONPATH": "/workspace/.pylibs",
-                },
-                remove=False,
-                stdout=True,
-                stderr=True,
-            )
-            status = container.wait(timeout=timeout)
-            stdout_bytes = container.logs(stdout=True, stderr=False)
-            stderr_bytes = container.logs(stdout=False, stderr=True)
-            elapsed = time.time() - start_time
-            stdout_text = stdout_bytes.decode() if isinstance(stdout_bytes, bytes) else str(stdout_bytes)
-            stderr_text = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
-            exit_code = status.get("StatusCode", 0) if isinstance(status, dict) else 0
-            if exit_code == 0:
-                return ExecutionResult(
-                    stdout=stdout_text, stderr=stderr_text, exit_code=0, execution_time=elapsed
-                )
-            else:
-                return ExecutionResult(
-                    stdout=stdout_text,
-                    stderr=stderr_text,
-                    exit_code=exit_code,
-                    execution_time=elapsed,
-                    error_type=self._classify_error(stderr_text),
-                )
-
-        except Exception as exc:
-            elapsed = time.time() - start_time
-            exc_str = str(exc)
-            stderr = getattr(exc, "stderr", None)
-            if stderr is None:
-                stderr_text = exc_str
-            else:
-                stderr_text = stderr.decode() if hasattr(stderr, "decode") else str(stderr)
-            # container.wait() 타임아웃 명시 감지
-            is_timeout = any(kw in exc_str.lower() for kw in (
-                "read timed out", "timed out", "timeout", "readtimeout"
-            ))
-            if is_timeout:
-                logger.info(f"[CRITIC] 콘테이너 timeout ({timeout}s) — 실행 시간 초과")
-                return ExecutionResult(
-                    stdout="",
-                    stderr=f"timeout_error: 코드 실행이 {timeout}초를 초과했습니다. 몴한 루프 프로그램이거나 평가 환경 제약일 수 있습니다.",
-                    exit_code=-1,
-                    execution_time=elapsed,
-                    error_type="timeout_error",
-                )
-            return ExecutionResult(
-                stdout="",
-                stderr=stderr_text,
-                exit_code=getattr(exc, "exit_status", -1),
-                execution_time=elapsed,
-                error_type=self._classify_error(stderr_text),
-            )
-        finally:
-            if container is not None:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
-            # 다단일 파일 모드: 임시 파일 삭제
-            if temp_file and os.path.exists(temp_file):
-                os.unlink(temp_file)
-            # 다중 파일 모드: sandbox에 복사한 파일들 및 서브디렉토리 삭제
-            for wf in written_files:
-                try:
-                    if os.path.exists(wf):
-                        os.unlink(wf)
-                except Exception:
-                    pass
-            # 생성된 빈 서브디렉토리 정리
-            for wf in written_files:
-                wf_dir = os.path.dirname(wf)
-                try:
-                    if wf_dir != self.SANDBOX_PATH and os.path.isdir(wf_dir):
-                        os.rmdir(wf_dir)  # 빈 디렉토리만 삭제
-                except OSError:
-                    pass  # 비어있지 않으면 무시
-            # pip install --target 으로 설치된 .pylibs 디렉토리 정리
-            pylibs_dir = os.path.join(self.SANDBOX_PATH, ".pylibs")
-            if os.path.isdir(pylibs_dir):
-                import shutil
-                try:
-                    shutil.rmtree(pylibs_dir)
-                except Exception:
-                    pass
+        workspace = self._require_workspace(workspace)
+        _, python_bin, _ = self._ensure_venv(workspace)
+        entry_path, _written = self._prepare_workspace_files(
+            code, setup_commands, workspace
+        )
+        return self._run_subprocess(
+            [str(python_bin), str(entry_path)],
+            timeout=timeout,
+            allow_network=allow_network,
+            workspace=workspace,
+        )
 
     async def execute(
         self,
@@ -387,12 +390,13 @@ class CriticRunner:
         timeout: int = 30,
         allow_network: bool = False,
         setup_commands: list[str] | None = None,
+        workspace: WorkspaceManager | None = None,
     ) -> ExecutionResult:
-        """Execute code in Docker sandbox without blocking the event loop."""
         import functools
+
         loop = asyncio.get_event_loop()
         fn = functools.partial(
-            self._execute_sync, code, timeout, allow_network, setup_commands
+            self._execute_sync, code, timeout, allow_network, setup_commands, workspace
         )
         return await loop.run_in_executor(None, fn)
 
@@ -402,181 +406,92 @@ class CriticRunner:
         execution_plan: Dict[str, Any],
         timeout: int = 30,
     ) -> ExecutionResult:
-        """Execute code according to an Execution Plan.
-        
-        Args:
-            code: The code to execute
-            execution_plan: Execution plan dict from Hands
-            timeout: Maximum execution time in seconds
-            
-        Returns:
-            ExecutionResult with execution details
-        """
-        # Run setup commands first
         setup_commands = execution_plan.get("setup_commands", [])
-        for cmd in setup_commands:
-            await self._run_setup_command(cmd)
-        
-        # Determine execution type
         exec_type = execution_plan.get("execution_type", "python_script")
-        
-        # Execute based on type
-        if exec_type == "python_test":
-            return await self._run_pytest(code, execution_plan, timeout)
-        elif exec_type == "api_server":
-            return await self._run_api_test(code, execution_plan, timeout)
-        elif exec_type == "cli_command":
-            return await self._run_cli(code, execution_plan, timeout)
-        else:
-            # Default: simple script execution
-            allow_network = execution_plan.get("requires_network", False)
-            return await self.execute(code, timeout, allow_network)
+
+        if exec_type == ExecutionType.PYTHON_TEST.value:
+            return await self._run_pytest(code, execution_plan, timeout, setup_commands)
+        if exec_type == ExecutionType.API_SERVER.value:
+            return await self._run_api_test(
+                code, execution_plan, timeout, setup_commands
+            )
+        if exec_type == ExecutionType.CLI_COMMAND.value:
+            return await self._run_cli(code, execution_plan, timeout, setup_commands)
+
+        allow_network = execution_plan.get("requires_network", False)
+        return await self.execute(code, timeout, allow_network, setup_commands)
 
     async def _run_setup_command(self, command: str) -> None:
-        """Run a setup command (e.g., pip install)."""
-        # This would run in the sandbox - for now, log it
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Setup command: {command}")
+        packages = self._cmds_to_pkg_names([command])
+        if packages:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._install_dependencies_sync, packages)
 
     async def _run_pytest(
-        self, code: str, plan: Dict[str, Any], timeout: int
+        self,
+        code: str,
+        plan: Dict[str, Any],
+        timeout: int,
+        setup_commands: list[str] | None = None,
     ) -> ExecutionResult:
-        """Run pytest on the generated test code."""
-        # Write test file
+        workspace, python_bin, _ = self._ensure_venv()
         test_file = plan.get("entry_point", "test_generated.py")
-        if not test_file.startswith("test_"):
-            test_file = f"test_{test_file}"
-            
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
-        ) as f:
-            f.write(code)
-            temp_file = f.name
-        os.chmod(temp_file, 0o644)
-        
-        # Run pytest
-        container = None
-        start_time = time.time()
-        try:
-            container = self.client.containers.run(
-                "pyvis-sandbox:latest",
-                f"pytest /workspace/{os.path.basename(temp_file)} -v",
-                volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
-                network_mode="none",
-                mem_limit="512m",
-                cpu_quota=100000,
-                detach=True,
-                environment={"PYTHONUNBUFFERED": "1"},
-                remove=False,
-                stdout=True,
-                stderr=True,
+        if not Path(test_file).name.startswith("test_"):
+            path = Path(test_file)
+            test_file = str(path.with_name(f"test_{path.name}"))
+        workspace.write_file(test_file, code)
+        if setup_commands:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self._install_dependencies_sync,
+                self._cmds_to_pkg_names(setup_commands),
+                120,
+                workspace,
             )
-            status = container.wait(timeout=timeout)
-            stdout_bytes = container.logs(stdout=True, stderr=False)
-            stderr_bytes = container.logs(stdout=False, stderr=True)
-            elapsed = time.time() - start_time
-            stdout_text = stdout_bytes.decode() if isinstance(stdout_bytes, bytes) else str(stdout_bytes)
-            stderr_text = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
-            exit_code = status.get("StatusCode", 0) if isinstance(status, dict) else 0
-            
-            return ExecutionResult(
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code,
-                execution_time=elapsed,
-                error_type=None if exit_code == 0 else "test_failure",
-            )
-        except Exception as exc:
-            elapsed = time.time() - start_time
-            return ExecutionResult(
-                stdout="",
-                stderr=str(exc),
-                exit_code=-1,
-                execution_time=elapsed,
-                error_type="execution_error",
-            )
-        finally:
-            if container is not None:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
+        return self._run_subprocess(
+            [str(python_bin), "-m", "pytest", test_file, "-v"],
+            timeout=timeout,
+            allow_network=False,
+            workspace=workspace,
+        )
 
     async def _run_api_test(
-        self, code: str, plan: Dict[str, Any], timeout: int
+        self,
+        code: str,
+        plan: Dict[str, Any],
+        timeout: int,
+        setup_commands: list[str] | None = None,
     ) -> ExecutionResult:
-        """Run API server test."""
-        # For now, just run as regular script with network enabled
         allow_network = plan.get("requires_network", True)
-        return await self.execute(code, timeout, allow_network)
+        return await self.execute(code, timeout, allow_network, setup_commands)
 
     async def _run_cli(
-        self, code: str, plan: Dict[str, Any], timeout: int
+        self,
+        code: str,
+        plan: Dict[str, Any],
+        timeout: int,
+        setup_commands: list[str] | None = None,
     ) -> ExecutionResult:
-        """Run CLI command."""
+        workspace, python_bin, _ = self._ensure_venv()
         entry_point = plan.get("entry_point", "main.py")
-        args = " ".join(plan.get("command_args", []))
-        
-        # Write the CLI script
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=self.SANDBOX_PATH, delete=False
-        ) as f:
-            f.write(code)
-            temp_file = f.name
-        os.chmod(temp_file, 0o755)
-        
-        container = None
-        start_time = time.time()
-        try:
-            cmd = f"python /workspace/{os.path.basename(temp_file)} {args}"
-            container = self.client.containers.run(
-                "pyvis-sandbox:latest",
-                cmd,
-                volumes={self.SANDBOX_PATH: {"bind": "/workspace", "mode": "rw"}},
-                network_mode="none",
-                mem_limit="512m",
-                cpu_quota=100000,
-                detach=True,
-                environment={"PYTHONUNBUFFERED": "1"},
-                remove=False,
-                stdout=True,
-                stderr=True,
+        workspace.write_file(entry_point, code)
+        if setup_commands:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self._install_dependencies_sync,
+                self._cmds_to_pkg_names(setup_commands),
+                120,
+                workspace,
             )
-            status = container.wait(timeout=timeout)
-            stdout_bytes = container.logs(stdout=True, stderr=False)
-            stderr_bytes = container.logs(stdout=False, stderr=True)
-            elapsed = time.time() - start_time
-            stdout_text = stdout_bytes.decode() if isinstance(stdout_bytes, bytes) else str(stdout_bytes)
-            stderr_text = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
-            exit_code = status.get("StatusCode", 0) if isinstance(status, dict) else 0
-            
-            return ExecutionResult(
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code,
-                execution_time=elapsed,
-                error_type=None if exit_code == 0 else "cli_error",
-            )
-        except Exception as exc:
-            elapsed = time.time() - start_time
-            return ExecutionResult(
-                stdout="",
-                stderr=str(exc),
-                exit_code=-1,
-                execution_time=elapsed,
-                error_type="execution_error",
-            )
-        finally:
-            if container is not None:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
+        args = [str(arg) for arg in plan.get("command_args", [])]
+        return self._run_subprocess(
+            [str(python_bin), str(workspace.get_file_path(entry_point)), *args],
+            timeout=timeout,
+            allow_network=False,
+            workspace=workspace,
+        )
 
     def _classify_error(self, stderr: str) -> str:
         for error_type, pattern in self.ERROR_PATTERNS:
@@ -600,4 +515,3 @@ class CriticRunner:
             f"- 표준 출력: {stdout}\n"
             f"- 에러 로그: {stderr}"
         )
-

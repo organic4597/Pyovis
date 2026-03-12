@@ -8,7 +8,9 @@ Tests cover:
 - Token estimation
 """
 
-import pytest
+import importlib
+
+pytest = importlib.import_module("pytest")
 from pyovis.orchestration.symbol_extractor import (
     SymbolExtractor,
     SymbolSummary,
@@ -303,6 +305,32 @@ CONST = 42
         assert "Test" in context
         assert "method" in context
         assert "CONST" in context
+
+    def test_extract_graph(self):
+        code = """
+class Service:
+    def run(self):
+        pass
+
+VALUE = 1
+"""
+        extractor = SymbolExtractor()
+        graph = extractor.extract_graph(code, "service.py")
+
+        assert graph["module"]["id"] == "module:service.py"
+        assert any(
+            symbol["name"] == "Service" and symbol["kind"] == "class"
+            for symbol in graph["symbols"]
+        )
+        assert any(
+            symbol["name"] == "run" and symbol["kind"] == "method"
+            for symbol in graph["symbols"]
+        )
+        assert any(
+            symbol["name"] == "VALUE" and symbol["kind"] == "constant"
+            for symbol in graph["symbols"]
+        )
+        assert any(edge["relation"] == "defines" for edge in graph["edges"])
 
 
 class TestGetHandsContextConfig:

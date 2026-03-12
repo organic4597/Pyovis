@@ -43,6 +43,33 @@ JUDGE_CTX=65536
 
 mkdir -p "$LOG_DIR"
 
+ensure_neo4j() {
+    local name="pyovis-neo4j"
+    if docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
+        return 0
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -q "^${name}$"; then
+        echo "[Neo4j] Starting existing container..."
+        docker start "$name" >/dev/null
+    else
+        echo "[Neo4j] Creating new container..."
+        docker run -d --name "$name" \
+            -e NEO4J_AUTH=neo4j/testpassword \
+            -p 7687:7687 -p 7474:7474 \
+            --restart unless-stopped \
+            neo4j:5-community >/dev/null
+    fi
+    echo "[Neo4j] Waiting for Neo4j to be ready..."
+    for i in $(seq 1 30); do
+        if docker exec "$name" cypher-shell -u neo4j -p testpassword 'RETURN 1' >/dev/null 2>&1; then
+            echo "[Neo4j] Ready (took ${i}s)"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "[Neo4j] WARNING: Neo4j did not respond within 30 seconds"
+}
+
 stop_server() {
     if [ -f "$PID_FILE" ]; then
         local pid
@@ -180,15 +207,19 @@ show_status() {
 
 case "${1:-help}" in
     planner)
+        ensure_neo4j
         start_server "planner" "$PLANNER_MODEL" "$PLANNER_CTX" ""
         ;;
     brain)
+        ensure_neo4j
         start_server "brain" "$BRAIN_MODEL" "$BRAIN_CTX" "" "$NGL" "q4_0"
         ;;
     hands)
+        ensure_neo4j
         start_server "hands" "$HANDS_MODEL" "$HANDS_CTX" "--jinja" "$HANDS_NGL"
         ;;
     judge)
+        ensure_neo4j
         start_server "judge" "$JUDGE_MODEL" "$JUDGE_CTX" ""
         ;;
     stop)

@@ -12,6 +12,7 @@ from pyovis.ai.brain import strip_cot
 # response_utils
 # ---------------------------------------------------------------------------
 
+
 class TestMessageText:
     def test_returns_content(self):
         assert message_text({"content": "hello"}) == "hello"
@@ -60,6 +61,7 @@ class TestParseJsonMessage:
 # strip_cot
 # ---------------------------------------------------------------------------
 
+
 class TestStripCot:
     def test_removes_think_block(self):
         text = "<think>internal reasoning</think>Final answer"
@@ -83,6 +85,7 @@ class TestStripCot:
 # ---------------------------------------------------------------------------
 # Hands — code fence stripping
 # ---------------------------------------------------------------------------
+
 
 class TestHandsCodeFenceStripping:
     def test_strips_opening_fence(self):
@@ -115,20 +118,25 @@ class TestHandsCodeFenceStripping:
 # SwapManagerConfig defaults
 # ---------------------------------------------------------------------------
 
+
 class TestSwapManagerConfig:
     def test_default_ctx_sizes(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert cfg.ctx_size_planner == 32768  # v5.1 reduced
-        assert cfg.ctx_size_brain == 32768    # v5.1 reduced
-        assert cfg.ctx_size_judge == 16384    # v5.1 reduced
-        assert cfg.ctx_size_hands_normal == 32768  # v5.1: symbol extraction success mode
+        assert cfg.ctx_size_brain == 32768  # v5.1 reduced
+        assert cfg.ctx_size_judge == 16384  # v5.1 reduced
+        assert (
+            cfg.ctx_size_hands_normal == 32768
+        )  # v5.1: symbol extraction success mode
         assert cfg.ctx_size_hands_fallback == 58368  # v5.1: fallback mode
         # Backward compatibility alias
         assert cfg.ctx_size_hands == 16384
 
     def test_default_ngl(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert cfg.n_gpu_layers == 60
         assert cfg.n_gpu_layers_hands == 40
@@ -136,6 +144,7 @@ class TestSwapManagerConfig:
 
     def test_default_kv_cache(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert cfg.cache_type_k == "q8_0"
         assert cfg.cache_type_v == "q8_0"
@@ -147,17 +156,20 @@ class TestSwapManagerConfig:
 
     def test_jinja_roles(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert "hands" in cfg.jinja_roles
         assert "brain" not in cfg.jinja_roles
 
     def test_fallbacks(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert cfg.fallbacks == {"planner": "brain", "hands": "brain"}
 
     def test_model_paths(self):
         from pyovis.ai.swap_manager import SwapManagerConfig
+
         cfg = SwapManagerConfig()
         assert len(cfg.models) == 4
         assert "planner" in cfg.models
@@ -170,9 +182,14 @@ class TestSwapManagerConfig:
 # ModelSwapManager — _ctx_size_for_role / _ngl_for_role
 # ---------------------------------------------------------------------------
 
+
 class TestSwapManagerRoleParams:
     def test_ctx_size_for_each_role(self):
-        from pyovis.ai.swap_manager import ModelSwapManager, SwapManagerConfig, ModelRole
+        from pyovis.ai.swap_manager import (
+            ModelSwapManager,
+            SwapManagerConfig,
+            ModelRole,
+        )
 
         with patch("pyovis.ai.swap_manager.Path") as mock_path:
             mock_path.return_value.mkdir = MagicMock()
@@ -180,12 +197,12 @@ class TestSwapManagerRoleParams:
             mgr.config = SwapManagerConfig()
 
         assert mgr._ctx_size_for_role(ModelRole.PLANNER) == 32768  # v5.1
-        assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 32768    # v5.1
-        assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 16384    # v5.1
-        # HANDS uses dual mode via config, _ctx_size_for_role returns ctx_size_hands
+        assert mgr._ctx_size_for_role(ModelRole.BRAIN) == 32768  # v5.1
+        assert mgr._ctx_size_for_role(ModelRole.JUDGE) == 16384  # v5.1
+        # HANDS normal mode should use the normal v5.1 context size
         assert mgr.config.ctx_size_hands_normal == 32768
         assert mgr.config.ctx_size_hands_fallback == 58368
-        assert mgr._ctx_size_for_role(ModelRole.HANDS) == 16384  # backward compat field
+        assert mgr._ctx_size_for_role(ModelRole.HANDS) == 32768
 
     def test_ngl_for_each_role(self):
         from pyovis.ai.swap_manager import ModelSwapManager, SwapManagerConfig
@@ -203,10 +220,15 @@ class TestSwapManagerRoleParams:
 # ModelSwapManager — ensure_model fallback
 # ---------------------------------------------------------------------------
 
+
 class TestSwapManagerFallback:
     @pytest.mark.asyncio
     async def test_fallback_when_model_missing(self):
-        from pyovis.ai.swap_manager import ModelSwapManager, SwapManagerConfig, ModelRole
+        from pyovis.ai.swap_manager import (
+            ModelSwapManager,
+            SwapManagerConfig,
+            ModelRole,
+        )
         import asyncio
 
         mgr = ModelSwapManager.__new__(ModelSwapManager)
@@ -270,6 +292,7 @@ class TestSwapManagerFallback:
 # ModelSwapManager — health check
 # ---------------------------------------------------------------------------
 
+
 class TestHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_ok(self):
@@ -321,9 +344,11 @@ class TestHealthCheck:
 # ModelRole enum
 # ---------------------------------------------------------------------------
 
+
 class TestModelRole:
     def test_all_roles(self):
         from pyovis.ai.swap_manager import ModelRole
+
         assert ModelRole.PLANNER.value == "planner"
         assert ModelRole.BRAIN.value == "brain"
         assert ModelRole.HANDS.value == "hands"
@@ -331,6 +356,7 @@ class TestModelRole:
 
     def test_str_enum(self):
         from pyovis.ai.swap_manager import ModelRole
+
         assert str(ModelRole.BRAIN) == "ModelRole.BRAIN"
         assert ModelRole("brain") == ModelRole.BRAIN
 
@@ -339,9 +365,11 @@ class TestModelRole:
 # Judge._parse
 # ---------------------------------------------------------------------------
 
+
 class TestJudgeParse:
     def _get_judge_parse(self):
         from pyovis.ai.judge import Judge
+
         j = Judge.__new__(Judge)
         return j._parse
 
@@ -381,6 +409,7 @@ class TestJudgeParse:
 # ---------------------------------------------------------------------------
 # Brain._call / Hands._call / Judge._call_fresh (mocked httpx)
 # ---------------------------------------------------------------------------
+
 
 class TestBrainCall:
     @pytest.mark.asyncio
@@ -478,3 +507,89 @@ class TestPlannerCall:
         result = await p._call("test")
         p.swap.ensure_model.assert_awaited_once_with("planner")
         assert result == ("response", "")
+
+
+# ---------------------------------------------------------------------------
+# ModelSwapManager — _verify_model_identity
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyModelIdentity:
+    """Tests for the /props-based identity check added after health check."""
+
+    def _make_mgr(self):
+        from pyovis.ai.swap_manager import ModelSwapManager, SwapManagerConfig
+
+        mgr = ModelSwapManager.__new__(ModelSwapManager)
+        mgr.config = SwapManagerConfig()
+        mgr._base_url = "http://localhost:8001"
+        mgr._http_client = AsyncMock()
+        return mgr
+
+    @pytest.mark.asyncio
+    async def test_identity_match_returns_true(self):
+        """Alias matches expected role → True."""
+        mgr = self._make_mgr()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"model_alias": "brain", "total_slots": 1}
+        mgr._http_client.get = AsyncMock(return_value=mock_resp)
+
+        result = await mgr._verify_model_identity("brain")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_identity_mismatch_returns_false(self):
+        """Alias differs from expected role → False (hard fail)."""
+        mgr = self._make_mgr()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"model_alias": "hands", "total_slots": 1}
+        mgr._http_client.get = AsyncMock(return_value=mock_resp)
+
+        result = await mgr._verify_model_identity("brain")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_props_non_200_returns_true_degraded(self):
+        """/props returns non-200 → True (degraded: don't block on server quirk)."""
+        mgr = self._make_mgr()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mgr._http_client.get = AsyncMock(return_value=mock_resp)
+
+        result = await mgr._verify_model_identity("brain")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_props_connection_error_returns_true_degraded(self):
+        """Network error reaching /props → True (degraded: liveness already confirmed)."""
+        mgr = self._make_mgr()
+        mgr._http_client.get = AsyncMock(side_effect=ConnectionError("refused"))
+
+        result = await mgr._verify_model_identity("brain")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_props_missing_alias_field_returns_false(self):
+        """/props responds 200 but model_alias absent → empty string != expected → False."""
+        mgr = self._make_mgr()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"total_slots": 1}  # no model_alias key
+        mgr._http_client.get = AsyncMock(return_value=mock_resp)
+
+        result = await mgr._verify_model_identity("brain")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_correct_url_queried(self):
+        """/props endpoint (not /health) is called for identity check."""
+        mgr = self._make_mgr()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"model_alias": "judge"}
+        mgr._http_client.get = AsyncMock(return_value=mock_resp)
+
+        await mgr._verify_model_identity("judge")
+        mgr._http_client.get.assert_awaited_once_with("http://localhost:8001/props")

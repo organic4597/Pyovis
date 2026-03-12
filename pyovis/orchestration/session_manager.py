@@ -11,7 +11,11 @@ from pyovis.execution.critic_runner import CriticRunner
 from pyovis.execution.file_writer import FileWriter, WorkspaceManager
 from pyovis.memory.graph_builder import KnowledgeGraphBuilder
 from pyovis.orchestration.loop_controller import LoopContext, ResearchLoopController
-from pyovis.orchestration.request_analyzer import RequestAnalyzer, TaskComplexity, ToolStatus
+from pyovis.orchestration.request_analyzer import (
+    RequestAnalyzer,
+    TaskComplexity,
+    ToolStatus,
+)
 from pyovis.skill.skill_manager import SkillManager
 from pyovis.tracking.loop_tracker import LoopTracker
 from pyovis.mcp.mcp_registry import MCPRegistryExplorer, MCPToolDiscovery
@@ -38,21 +42,21 @@ class SessionManager:
         self.bot: Any = None
         self.skill_manager = SkillManager()
         self.critic = CriticRunner()
-        
+
         # MCP integration
         self.mcp_manager = MCPManager()
         self.tool_adapter = MCPToolAdapter()
         self.kg_builder = KnowledgeGraphBuilder()
-        
+
         # AI roles with tool adapter
         self.brain = Brain(self.model_swap)
         self.hands = Hands(self.model_swap, tool_adapter=self.tool_adapter)
         self.judge = Judge(self.model_swap)
         self.planner = Planner(self.model_swap)
-        
+
         # Request analysis
         self.request_analyzer = RequestAnalyzer(self.model_swap)
-        
+
         # MCP and Skill discovery
         self.mcp_explorer = MCPRegistryExplorer()
         self.skill_discovery = MCPToolDiscovery()
@@ -60,6 +64,7 @@ class SessionManager:
 
         # Conversation memory (per-chat history)
         self.conversation_memory = ConversationMemory()
+        WorkspaceManager.cleanup_stale_projects()
 
     _TOOL_FALLBACK: dict[str, list[str]] = {
         "weather_api": ["brave-search"],
@@ -94,10 +99,14 @@ class SessionManager:
             if registry_tools:
                 return registry_tools
         except Exception:
-            logger.warning("session_manager: MCP registry search failed, using known tools list")
+            logger.warning(
+                "session_manager: MCP registry search failed, using known tools list"
+            )
         return list(self._KNOWN_MCP_TOOLS)
 
-    def suggest_alternative_tools(self, failed_tools: list[str]) -> dict[str, list[str]]:
+    def suggest_alternative_tools(
+        self, failed_tools: list[str]
+    ) -> dict[str, list[str]]:
         """Suggest alternative MCP tools for tools that failed to install."""
         suggestions: dict[str, list[str]] = {}
         for tool in failed_tools:
@@ -144,7 +153,9 @@ class SessionManager:
                 self.tool_adapter.register_mcp_client("fetch", fetch_client)
                 logger.info("session_manager: fetch MCP server connected")
         except Exception:
-            logger.warning("session_manager: failed to connect fetch MCP server", exc_info=True)
+            logger.warning(
+                "session_manager: failed to connect fetch MCP server", exc_info=True
+            )
             self._register_native_tools()
 
         self._mcp_initialized = True
@@ -153,7 +164,9 @@ class SessionManager:
         import httpx as _httpx
 
         async def fetch(url: str, max_length: int = 8000) -> str:
-            async with _httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with _httpx.AsyncClient(
+                timeout=10.0, follow_redirects=True
+            ) as client:
                 resp = await client.get(url, headers={"User-Agent": "pyovis/4.0"})
                 resp.raise_for_status()
                 return resp.text[:max_length]
@@ -170,7 +183,10 @@ class SessionManager:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "가져올 URL"},
-                    "max_length": {"type": "integer", "description": "반환할 최대 문자 수 (기본 8000)"},
+                    "max_length": {
+                        "type": "integer",
+                        "description": "반환할 최대 문자 수 (기본 8000)",
+                    },
                 },
                 "required": ["url"],
             },
@@ -180,19 +196,20 @@ class SessionManager:
     def get_available_tools(self) -> list[str]:
         """Get list of currently available tools from connected MCP servers and skills."""
         tools = []
-        
+
         # MCP tools from connected servers
         for server_name, client in self.mcp_manager.clients.items():
             for tool in client.tools:
                 tools.append(f"{server_name}:{tool.name}")
-        
+
         # Skills from verified directory
         from pyovis.skill.skill_manager import VERIFIED_DIR
+
         if VERIFIED_DIR.exists():
             for skill_file in VERIFIED_DIR.glob("*.md"):
                 skill_name = skill_file.stem
                 tools.append(f"skill:{skill_name}")
-        
+
         return tools
 
     def get_tools_for_task(self, task_keywords: list[str]) -> dict:
@@ -202,33 +219,38 @@ class SessionManager:
         """
         matched_mcp = []
         matched_skills = []
-        
+
         task_lower = " ".join(task_keywords).lower()
-        
+
         # Check MCP tools from connected clients
         for server_name, client in self.mcp_manager.clients.items():
             for tool in client.tools:
                 tool_desc_lower = tool.description.lower()
                 if any(kw in tool_desc_lower for kw in task_keywords):
-                    matched_mcp.append({
-                        "server": server_name,
-                        "tool": tool.name,
-                        "description": tool.description[:100],
-                    })
-        
+                    matched_mcp.append(
+                        {
+                            "server": server_name,
+                            "tool": tool.name,
+                            "description": tool.description[:100],
+                        }
+                    )
+
         # Check skills from verified directory
         from pyovis.skill.skill_manager import VERIFIED_DIR
+
         if VERIFIED_DIR.exists():
             for skill_file in VERIFIED_DIR.glob("*.md"):
                 content = skill_file.read_text(encoding="utf-8").lower()
                 if any(kw in content for kw in task_keywords):
-                    matched_skills.append({
-                        "name": skill_file.stem,
-                        "path": str(skill_file),
-                    })
-        
+                    matched_skills.append(
+                        {
+                            "name": skill_file.stem,
+                            "path": str(skill_file),
+                        }
+                    )
+
         needs_external = len(matched_mcp) == 0 and len(matched_skills) == 0
-        
+
         return {
             "mcp_tools": matched_mcp,
             "skills": matched_skills,
@@ -252,7 +274,7 @@ class SessionManager:
                     task_data = json.loads(task_data)
                 except json.JSONDecodeError:
                     task_data = {"text": task_data}
-            
+
             if isinstance(task_data, dict):
                 task_id = task_data.get("task_id", str(uuid.uuid4()))
                 payload = task_data.get("text", str(task_data))
@@ -261,15 +283,15 @@ class SessionManager:
                 task_id = str(uuid.uuid4())
                 payload = str(task_data)
                 chat_id = None
-            
+
             await self._ensure_mcp_tools()
 
-            result = await self._handle_task(task_id, payload, chat_id)
-            
+            result = await self._handle_task_routed(task_id, payload, chat_id)
+
             # Call result callback if provided
             if self.result_callback and task_id:
                 self.result_callback(task_id, result)
-            
+
             if self.bot and task_id:
                 self.bot.submit_result(task_id, result)
 
@@ -278,131 +300,33 @@ class SessionManager:
         await self.mcp_explorer.close()
         await self.skill_discovery.close()
 
-    async def _handle_task(self, task_id: str, payload: str, chat_id: str | int | None = None) -> dict:
-        from pyovis.mcp.tool_adapter import ToolEnabledLLM
-        from pyovis.ai.response_utils import parse_json_message
-        from datetime import datetime, timezone, timedelta
-        import time as _time
-
+    async def _handle_task_routed(
+        self, task_id: str, payload: str, chat_id: str | int | None = None
+    ) -> dict:
         logger.info("━━━ 새 요청 [%s] ━━━", task_id[:8])
         logger.info("📩 사용자: %s", payload[:120])
-        t0 = _time.monotonic()
 
-        KST = timezone(timedelta(hours=9))
-        now_str = datetime.now(KST).strftime("%Y년 %m월 %d일 %A %H:%M KST")
-
-        logger.info("🔍 Graph RAG 컨텍스트 조회 중...")
-        graph_context = await self._enrich_with_graph_rag(payload)
-        enriched_payload = payload
-        if graph_context:
-            enriched_payload = f"{payload}\n\n--- Knowledge Graph Context ---\n{graph_context}"
-            logger.info("🔍 Graph RAG: %d자 컨텍스트 추가됨", len(graph_context))
-        else:
-            logger.info("🔍 Graph RAG: 컨텍스트 없음 (빈 그래프)")
-
-        # 대화 히스토리 로드 (연관성 기반 필터링)
-        conv_history = ""
-        if chat_id:
-            conv_history = self.conversation_memory.filter_relevant(chat_id, payload, last_n=10)
-            if conv_history:
-                logger.info("💬 대화 히스토리: %d자 로드됨 (연관성 필터 적용, chat_id=%s)", len(conv_history), chat_id)
-
-        llm = ToolEnabledLLM(
-            swap_manager=self.model_swap,
-            role="brain",
-            tool_adapter=self.tool_adapter,
-            max_tool_iterations=5,
+        analysis = await self.request_analyzer.analyze(
+            payload, self.get_available_tools()
         )
-        user_message = f"""현재 날짜/시간: {now_str}
+        result = await self._handle_request(task_id, payload, analysis, chat_id=chat_id)
 
-{f"--- 이전 대화 기록 ---{chr(10)}{conv_history}{chr(10)}{chr(10)}" if conv_history else ""}사용자 요청: {enriched_payload}
-
-요청을 분석하고 직접 처리하라. 실시간 정보(날씨, 환율 등)는 fetch 도구를 사용하라.
-이전 대화 기록이 있다면, 사용자가 이전 대화를 참조하는 질문("아까", "어제", "전에 물어본", "그때" 등)을 할 때 해당 기록을 활용하여 답변하라.
-
-다음 JSON 형식으로 응답하라:
-{{
-  "complexity": "simple 또는 complex",
-  "status": "success",
-  "result": "코드 작성 요청이면 실행 가능한 전체 코드만 (설명 없이), 일반 질문이면 답변"
-  "file_path": "저장할 파일명 (예: game.py). 코드가 있으면 반드시 지정"
-  "message": "사용자에게 전달할 메시지"
-}}
-
- 코드 작성: result에 실행 가능한 완전한 코드만 넣고 file_path 지정. 설명은 message에
-- 날씨/실시간 정보: fetch 도구로 공개 API 호출
-- 다중 파일 생성·아키텍처 설계 등 복잡한 작업: complexity를 "complex"로 설정
-"""
-        logger.info("🧠 LLM 호출 시작 (role=brain)...")
-        t_llm = _time.monotonic()
-        try:
-            response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
-        finally:
-            await llm.aclose()
-        elapsed_llm = _time.monotonic() - t_llm
-        logger.info("🧠 LLM 응답 완료 (%.1f초, %d자)", elapsed_llm, len(response))
-
-        result = parse_json_message(
-            {"content": response},
-            default={"complexity": "simple", "status": "success", "message": response},
-        )
-        logger.info("📋 판정: complexity=%s, status=%s", result.get("complexity"), result.get("status"))
-
-        if result.get("complexity") == "complex":
-            logger.info("🔄 복잡한 작업 → 전체 루프로 전환")
-            if self.bot and chat_id:
-                try:
-                    asyncio.create_task(
-                        self.bot.send_progress(int(chat_id), "⏳ 복잡한 작업을 시작합니다. 완료까지 좌시 기다려주세요..."))
-                except Exception:
-                    pass
-            complex_result = await self._handle_complex_task(task_id, payload, chat_id=chat_id)
-            complex_result["tool_status"] = "not_needed"
-            complex_result["tools_used"] = []
-            reasoning_text = "\n".join(complex_result.get("reasoning_log", []))
-            asyncio.create_task(self._ingest_to_graph(payload, task_id, reasoning_text))
-            elapsed_total = _time.monotonic() - t0
-            logger.info("✅ 완료 [%s] (총 %.1f초, 경로=complex)", task_id[:8], elapsed_total)
-            return complex_result
-
-        if result.get("file_path") and result.get("result"):
-            from pyovis.execution.file_writer import FileWriter, WorkspaceManager
-            workspace = WorkspaceManager(task_id)
-            FileWriter(workspace).save_code(result["file_path"], result["result"])
-            result["workspace"] = str(workspace.project_root)
-            logger.info("💾 파일 저장: %s", result["file_path"])
-        elif result.get("result") and not result.get("file_path"):
-            from pyovis.execution.file_writer import FileWriter, WorkspaceManager
-            workspace = WorkspaceManager(task_id)
-            default_path = "output.py"
-            FileWriter(workspace).save_code(default_path, result["result"])
-            result["file_path"] = default_path
-            result["workspace"] = str(workspace.project_root)
-            logger.info("💾 파일 저장 (기본경로): %s", default_path)
-            if "message" in result:
-                result["message"] = f"{result['message']}\n\n💾 파일 저장됨: {default_path}"
-            else:
-                result["message"] = f"코드가 {default_path}에 저장되었습니다."
-
-
-        result["task_id"] = task_id
-        result["path"] = "simple"
-        result["tool_status"] = "not_needed"
-        result["tools_used"] = []
-        asyncio.create_task(self._ingest_to_graph(payload, task_id))
-        elapsed_total = _time.monotonic() - t0
-        logger.info("✅ 완료 [%s] (총 %.1f초, 경로=simple)", task_id[:8], elapsed_total)
-
-        # 대화 히스토리에 현재 교환 저장
         response_msg = result.get("message", "")
         if chat_id and response_msg:
             self.conversation_memory.add_exchange(chat_id, payload, response_msg)
             logger.info("💬 대화 히스토리 저장 완료 (chat_id=%s)", chat_id)
         return result
 
-    async def _handle_request(self, task_id: str, payload: str, analysis) -> dict:
+    async def _handle_task(
+        self, task_id: str, payload: str, chat_id: str | int | None = None
+    ) -> dict:
+        return await self._handle_task_routed(task_id, payload, chat_id)
+
+    async def _handle_request(
+        self, task_id: str, payload: str, analysis, chat_id: str | int | None = None
+    ) -> dict:
         """Handle request based on Brain's analysis result."""
-        
+
         if analysis.needs_clarification:
             return {
                 "status": "clarification_needed",
@@ -410,28 +334,37 @@ class SessionManager:
                 "questions": analysis.clarification_questions,
                 "message": "Additional information required",
             }
-        
+
         if analysis.tool_status == ToolStatus.NEEDED_PENDING:
             tool_result = await self._handle_tool_requirements(analysis.required_tools)
             if tool_result.get("status") == "approval_required":
                 return tool_result
-        
+
         elif analysis.tool_status == ToolStatus.ALREADY_AVAILABLE:
             pass
-        
+
         graph_context = await self._enrich_with_graph_rag(payload)
         enriched_payload = payload
         if graph_context:
             enriched_payload = (
                 f"{payload}\n\n--- Knowledge Graph Context ---\n{graph_context}"
             )
-        
+
         # [v5.4] Brain 직접 실행 (Tool-First Optimization)
         # Planner/Hands 불필요. Brain 이 도구만 써서 끝내면 됨.
         is_tool_only_task = (
-            analysis.complexity in [TaskComplexity.SIMPLE, TaskComplexity.CHAT] and
-            analysis.tool_status in [ToolStatus.ALREADY_AVAILABLE, ToolStatus.NOT_NEEDED, ToolStatus.NEEDED_APPROVED, ToolStatus.NEEDED_PENDING] and
-            any(t in analysis.available_tools_to_use for t in ['fetch', 'brave-search', 'browser'])
+            analysis.complexity in [TaskComplexity.SIMPLE, TaskComplexity.CHAT]
+            and analysis.tool_status
+            in [
+                ToolStatus.ALREADY_AVAILABLE,
+                ToolStatus.NOT_NEEDED,
+                ToolStatus.NEEDED_APPROVED,
+                ToolStatus.NEEDED_PENDING,
+            ]
+            and any(
+                t in analysis.available_tools_to_use
+                for t in ["fetch", "brave-search", "browser"]
+            )
         )
 
         if analysis.complexity == TaskComplexity.CHAT:
@@ -439,22 +372,28 @@ class SessionManager:
             result = await self._handle_chat(task_id, payload)
         elif is_tool_only_task:
             # [최우선] 도구로 끝나는 건 Brain 이 바로 처리 (대기시간 0)
-            logger.info(f"🚀 [Optimization] 도구 감지! Brain 이 직접 처리 (tools: {analysis.available_tools_to_use})")
-            result = await self._handle_brain_direct(task_id, enriched_payload, analysis.available_tools_to_use)
+            logger.info(
+                f"🚀 [Optimization] 도구 감지! Brain 이 직접 처리 (tools: {analysis.available_tools_to_use})"
+            )
+            result = await self._handle_brain_direct(
+                task_id, enriched_payload, analysis.available_tools_to_use
+            )
         elif analysis.complexity == TaskComplexity.SIMPLE:
             # 순수 코드 생성 작업
             result = await self._handle_simple_task(task_id, enriched_payload)
         else:
             # 복잡한 작업 (전체 루프)
-            result = await self._handle_complex_task(task_id, enriched_payload)
+            result = await self._handle_complex_task(
+                task_id, enriched_payload, chat_id=chat_id
+            )
 
         # Result metadata and KG ingestion
-        
+
         result["tool_status"] = analysis.tool_status.value
         result["tools_used"] = analysis.available_tools_to_use
-        
-        await self._ingest_to_graph(payload, task_id)
-        
+
+        asyncio.create_task(self._ingest_to_graph(payload, task_id))
+
         return result
 
     async def _enrich_with_graph_rag(self, payload: str) -> str:
@@ -462,43 +401,50 @@ class SessionManager:
             if self.kg_builder.get_stats()["total_nodes"] == 0:
                 return ""
             rag_result = await self.kg_builder.query_graph_rag(
-                payload, depth=2, use_llm_extraction=False,
+                payload,
+                depth=2,
+                use_llm_extraction=False,
             )
             return rag_result.get("context_text", "")
         except Exception:
             logger.debug("session_manager: graph RAG enrichment skipped", exc_info=True)
             return ""
 
-    async def _ingest_to_graph(self, payload: str, task_id: str, reasoning: str = "") -> None:
+    async def _ingest_to_graph(
+        self, payload: str, task_id: str, reasoning: str = ""
+    ) -> None:
         try:
             logger.info("📝 KG 백그라운드 저장 시작 [%s]", task_id[:8])
             await self.kg_builder.add_text(payload, source=f"task:{task_id}")
             if reasoning:
                 from pyovis.ai.response_utils import summarize_thinking
+
                 summarized = summarize_thinking(reasoning, max_chars=500)
-                await self.kg_builder.add_text(summarized, source=f"reasoning:{task_id}")
+                await self.kg_builder.add_text(
+                    summarized, source=f"reasoning:{task_id}"
+                )
             logger.info("📝 KG 백그라운드 저장 완료 [%s]", task_id[:8])
         except Exception:
             logger.debug("session_manager: graph ingestion skipped", exc_info=True)
 
-
-    
-    async def _handle_brain_direct(self, task_id: str, payload: str, tools: list[str]) -> dict:
+    async def _handle_brain_direct(
+        self, task_id: str, payload: str, tools: list[str]
+    ) -> dict:
         """
         Brain 이 직접 도구을 실행하여 처리 (코드 생성 불필요한 단순 작업).
         예: 날씨, 뉴스, 레딧 정보 수집 등
         """
         logger.info(f"🧠 [Direct] Brain 이 직접 도구 실행 (tools: {', '.join(tools)})")
-        
+
         from pyovis.mcp.tool_adapter import ToolEnabledLLM
-        
+
         llm = ToolEnabledLLM(
             swap_manager=self.model_swap,
             role="brain",
             tool_adapter=self.tool_adapter,
-            max_tool_iterations=5
+            max_tool_iterations=5,
         )
-        
+
         user_message = f"""사용자 요청: {payload}
 
 당신은 똑똑한 비서입니다. 위 요청을 해결하기 위해 주어진 도구 (fetch 등) 를 직접 사용하여 작업을 완료하세요.
@@ -508,11 +454,13 @@ class SessionManager:
         # (ToolEnabledLLM 이 self.tool_adapter 를 통해 자동으로 인식)
 
         try:
-            result_content = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+            result_content = await llm.call_with_tools(
+                self.request_analyzer.system_prompt, user_message
+            )
             return {
                 "status": "success",
                 "message": result_content,
-                "path": "brain_direct"
+                "path": "brain_direct",
             }
         except Exception as e:
             logger.error(f"Brain 직접 처리 중 오류: {e}")
@@ -555,7 +503,9 @@ class SessionManager:
     - 날씨/실시간 정보: fetch 도구로 open-meteo.com 등 공개 API 직접 호출
     """
         try:
-            response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+            response = await llm.call_with_tools(
+                self.request_analyzer.system_prompt, user_message
+            )
         finally:
             await llm.aclose()
 
@@ -567,15 +517,16 @@ class SessionManager:
         # Save to file if file_path specified
         if result.get("file_path") and result.get("result"):
             workspace = WorkspaceManager(task_id)
+            workspace.mark_incomplete()
             file_writer = FileWriter(workspace)
             file_writer.save_code(result["file_path"], result["result"])
+            workspace.mark_complete()
             result["workspace"] = str(workspace.project_root)
 
         result["task_id"] = task_id
         result["path"] = "simple"
         return result
 
-    
     async def _handle_chat(self, task_id: str, payload: str) -> dict:
         """Handle chat/conversation - never generates files, just responds."""
         from pyovis.mcp.tool_adapter import ToolEnabledLLM
@@ -607,7 +558,9 @@ class SessionManager:
     **중요**: file_path 를 포함하지 마라. 이 요청은 파일 생성이 필요 없다.
     """
         try:
-            response = await llm.call_with_tools(self.request_analyzer.system_prompt, user_message)
+            response = await llm.call_with_tools(
+                self.request_analyzer.system_prompt, user_message
+            )
         finally:
             await llm.aclose()
 
@@ -634,34 +587,32 @@ class SessionManager:
             swap_manager=self.model_swap,
             role="brain",  # Brain 이 직접 도구 사용
             tool_adapter=self.tool_adapter,
-            max_tool_iterations=5
+            max_tool_iterations=5,
         )
 
         try:
             # Brain 이 직접 fetch 등을 호출하여 답변 생성
             response = await llm.call_with_tools(
                 system_prompt="You are a helpful assistant. If the user asks for information (news, weather, search), use the available tools (fetch) to find the answer.",
-                user_message=payload
+                user_message=payload,
             )
 
             return {
                 "status": "success",
                 "message": response,
-                "path": "fast_track_tool_only"
+                "path": "fast_track_tool_only",
             }
         except Exception as e:
             logger.error(f"Fast-Track failed: {e}")
             # 실패시에는 기존 로직으로 fall-through (complex 처리 등)
-            return {
-                "status": "error",
-                "message": str(e),
-                "path": "fast_track_failed"
-            }
+            return {"status": "error", "message": str(e), "path": "fast_track_failed"}
 
-
-    async def _handle_complex_task(self, task_id: str, payload: str, *, chat_id: str | int | None = None) -> dict:
+    async def _handle_complex_task(
+        self, task_id: str, payload: str, *, chat_id: str | int | None = None
+    ) -> dict:
         """Handle complex task via full loop."""
         workspace = WorkspaceManager(task_id)
+        workspace.mark_incomplete()
         file_writer = FileWriter(workspace)
 
         async def _progress(msg: str) -> None:
@@ -670,7 +621,7 @@ class SessionManager:
                     await self.bot.send_progress(int(chat_id), msg)
                 except Exception:
                     pass
-        
+
         controller = ResearchLoopController(
             self.brain,
             self.hands,
@@ -681,8 +632,9 @@ class SessionManager:
             planner=self.planner,
             file_writer=file_writer,
             workspace=workspace,
+            kg_builder=self.kg_builder,
         )
-        
+
         ctx = LoopContext(
             task_id=task_id,
             task_description=payload,
@@ -690,8 +642,10 @@ class SessionManager:
             project_id=workspace.project_id,
             progress_callback=_progress,
         )
-        
+
         result = await controller.run(ctx)
+        if result.get("status") == "complete":
+            workspace.mark_complete()
         result["path"] = "complex"
         return result
 
@@ -699,39 +653,44 @@ class SessionManager:
         """Handle required tools - discover and install."""
         installed = []
         pending = []
-        
+
         for tool in required_tools:
             # Try to find in MCP registry
             search_result = await self.mcp_explorer.search_servers(query=tool, limit=1)
-            
+
             if search_result.servers:
                 server = search_result.servers[0]
                 install_result = await self.mcp_explorer.install_server(
-                    server.name,
-                    requires_approval=True
+                    server.name, requires_approval=True
                 )
-                
+
                 if install_result.get("status") == "approval_required":
-                    pending.append({
-                        "tool": tool,
-                        "server": server.name,
-                        "install_command": server.install_command,
-                    })
+                    pending.append(
+                        {
+                            "tool": tool,
+                            "server": server.name,
+                            "install_command": server.install_command,
+                        }
+                    )
                 else:
-                    installed.append({
-                        "tool": tool,
-                        "server": server.name,
-                        "status": "installed",
-                    })
+                    installed.append(
+                        {
+                            "tool": tool,
+                            "server": server.name,
+                            "status": "installed",
+                        }
+                    )
             else:
                 alternatives = self.suggest_alternative_tools([tool]).get(tool, [])
-                pending.append({
-                    "tool": tool,
-                    "server": None,
-                    "message": f"Tool '{tool}' not found in MCP registry",
-                    "alternatives": alternatives,
-                })
-        
+                pending.append(
+                    {
+                        "tool": tool,
+                        "server": None,
+                        "message": f"Tool '{tool}' not found in MCP registry",
+                        "alternatives": alternatives,
+                    }
+                )
+
         if pending:
             alt_hints = [
                 f"{p['tool']} → {p['alternatives']}"
@@ -748,37 +707,45 @@ class SessionManager:
                 "installed": installed,
                 "message": message,
             }
-        
+
         return {
             "status": "tools_ready",
             "installed": installed,
         }
-    
+
     async def install_tools(self, tools: list[str], original_request: str = "") -> dict:
         """Install tools after approval."""
         installed = []
         failed = []
-        
+
         for tool in tools:
             try:
-                search_result = await self.mcp_explorer.search_servers(query=tool, limit=1)
-                
+                search_result = await self.mcp_explorer.search_servers(
+                    query=tool, limit=1
+                )
+
                 if search_result.servers:
                     server = search_result.servers[0]
                     install_result = await self.mcp_explorer.install_server(
-                        server.name,
-                        requires_approval=False
+                        server.name, requires_approval=False
                     )
-                    
+
                     if install_result.get("status") == "installed":
                         installed.append({"tool": tool, "server": server.name})
                     else:
-                        failed.append({"tool": tool, "reason": install_result.get("message", "Unknown error")})
+                        failed.append(
+                            {
+                                "tool": tool,
+                                "reason": install_result.get(
+                                    "message", "Unknown error"
+                                ),
+                            }
+                        )
                 else:
                     failed.append({"tool": tool, "reason": "Not found in registry"})
             except Exception as e:
                 failed.append({"tool": tool, "reason": str(e)})
-        
+
         if installed and not failed:
             return {
                 "status": "success",
@@ -811,7 +778,7 @@ class SessionManager:
         """Discover available MCP tools/servers."""
         servers = await self.mcp_explorer.search_servers(query=query)
         skills = await self.skill_discovery.discover_skills(query=query)
-        
+
         return {
             "mcp_servers": [
                 {

@@ -3,6 +3,11 @@ import signal
 
 import importlib
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
 import pyovis_core
 from pyovis.ai import ModelSwapManager
 from pyovis.memory.kg_server import start_kg_server

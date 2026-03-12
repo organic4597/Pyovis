@@ -61,9 +61,10 @@ async def _index(request: Request) -> HTMLResponse:
 <div class="header">
   <h1><span>Pyovis</span> Knowledge Graph</h1>
   <div class="stats">
-    <span>Nodes: <span class="num">{stats['total_nodes']}</span></span>
-    <span>Edges: <span class="num">{stats['total_edges']}</span></span>
-    <span>Communities: <span class="num">{stats['total_communities']}</span></span>
+    <span>Nodes: <span class="num">{stats["total_nodes"]}</span></span>
+    <span>Edges: <span class="num">{stats["total_edges"]}</span></span>
+    <span>Communities: <span class="num">{stats["total_communities"]}</span></span>
+    <span>Code Symbols: <span class="num">{stats["total_code_symbols"]}</span></span>
   </div>
 </div>
 <div class="toolbar">
@@ -109,28 +110,47 @@ async def _api_detect_communities(request: Request) -> JSONResponse:
     kg: KnowledgeGraphBuilder = request.app.state.kg
     communities = kg.detect_communities()
     _build_graph_html(kg)
-    return JSONResponse({
-        "status": "ok",
-        "communities": len(communities),
-    })
+    return JSONResponse(
+        {
+            "status": "ok",
+            "communities": len(communities),
+        }
+    )
 
 
 async def _api_nodes(request: Request) -> JSONResponse:
     kg: KnowledgeGraphBuilder = request.app.state.kg
     graph = kg._graph
-    return JSONResponse({
-        "nodes": graph.get("nodes", {}),
-        "total": len(graph.get("nodes", {})),
-    })
+    return JSONResponse(
+        {
+            "nodes": graph.get("nodes", {}),
+            "total": len(graph.get("nodes", {})),
+        }
+    )
 
 
 async def _api_edges(request: Request) -> JSONResponse:
     kg: KnowledgeGraphBuilder = request.app.state.kg
     graph = kg._graph
-    return JSONResponse({
-        "edges": graph.get("edges", []),
-        "total": len(graph.get("edges", [])),
-    })
+    return JSONResponse(
+        {
+            "edges": graph.get("edges", []),
+            "total": len(graph.get("edges", [])),
+        }
+    )
+
+
+async def _api_code_symbols(request: Request) -> JSONResponse:
+    kg: KnowledgeGraphBuilder = request.app.state.kg
+    graph = kg._graph
+    return JSONResponse(
+        {
+            "modules": graph.get("code_modules", {}),
+            "symbols": graph.get("code_symbols", {}),
+            "edges": graph.get("code_symbol_edges", []),
+            "total_symbols": len(graph.get("code_symbols", {})),
+        }
+    )
 
 
 _routes = [
@@ -141,6 +161,7 @@ _routes = [
     Route("/api/detect-communities", _api_detect_communities, methods=["POST"]),
     Route("/api/nodes", _api_nodes),
     Route("/api/edges", _api_edges),
+    Route("/api/code-symbols", _api_code_symbols),
 ]
 
 
@@ -152,7 +173,9 @@ def create_app(kg: KnowledgeGraphBuilder | None = None) -> Starlette:
     return app
 
 
-async def start_kg_web(kg: KnowledgeGraphBuilder | None = None, port: int = 8502) -> None:
+async def start_kg_web(
+    kg: KnowledgeGraphBuilder | None = None, port: int = 8502
+) -> None:
     import uvicorn
 
     app = create_app(kg)

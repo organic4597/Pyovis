@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
+import venv
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -9,11 +11,13 @@ from typing import Optional
 
 class WorkspaceManager:
     WORKSPACE_ROOT = Path("/pyovis_memory/workspace")
-    
+    INCOMPLETE_MARKER = ".pyovis_incomplete"
+    VENV_DIRNAME = ".venv"
+
     def __init__(self, project_id: str | None = None):
         self.project_id = project_id or self._generate_project_id()
         self.project_root = self.WORKSPACE_ROOT / self.project_id
-        
+
     def _validate_path(self, relative_path: str) -> Path:
         """Resolve and validate that path stays within project_root (path traversal 방지)."""
         full_path = (self.project_root / relative_path).resolve()
@@ -22,68 +26,146 @@ class WorkspaceManager:
                 f"Path traversal 거부: {relative_path!r} → project_root 외부 접근 시도"
             )
         return full_path
+
     def _generate_project_id(self) -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"project_{timestamp}"
-    
+
     def create_project(self, structure: list[str] | None = None) -> Path:
         """Create project directory structure (directories only, no empty files)."""
         self.project_root.mkdir(parents=True, exist_ok=True)
-        
+
         if structure:
             for file_path in structure:
-                full_path = self.project_root / file_path
+                full_path = self._validate_path(file_path)
                 full_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         return self.project_root
-    
+
+    def mark_incomplete(self) -> None:
+        self.project_root.mkdir(parents=True, exist_ok=True)
+        (self.project_root / self.INCOMPLETE_MARKER).write_text(
+            "incomplete", encoding="utf-8"
+        )
+
+    def mark_complete(self) -> None:
+        marker = self.project_root / self.INCOMPLETE_MARKER
+        if marker.exists():
+            marker.unlink()
+
+    def get_venv_path(self) -> Path:
+        return self.project_root / self.VENV_DIRNAME
+
+    def get_venv_python(self) -> Path:
+        if os.name == "nt":
+            return self.get_venv_path() / "Scripts" / "python.exe"
+        return self.get_venv_path() / "bin" / "python"
+
+    def get_venv_pip(self) -> Path:
+        if os.name == "nt":
+            return self.get_venv_path() / "Scripts" / "pip.exe"
+        return self.get_venv_path() / "bin" / "pip"
+
+    def create_venv(self, python_executable: str | None = None) -> Path:
+        self.project_root.mkdir(parents=True, exist_ok=True)
+        venv_path = self.get_venv_path()
+        python_bin = self.get_venv_python()
+        if python_bin.exists():
+            return venv_path
+
+        builder = venv.EnvBuilder(with_pip=True, clear=False, symlinks=True)
+        if python_executable and python_executable != os.environ.get(
+            "PYTHONEXECUTABLE"
+        ):
+            original = os.environ.get("VIRTUAL_ENV")
+            try:
+                os.environ["PYTHONEXECUTABLE"] = python_executable
+                builder.create(venv_path)
+            finally:
+                if original is None:
+                    os.environ.pop("PYTHONEXECUTABLE", None)
+                else:
+                    os.environ["PYTHONEXECUTABLE"] = original
+        else:
+            builder.create(venv_path)
+        return venv_path
+
+    @classmethod
+    def cleanup_stale_projects(
+        cls, max_age_hours: int = 24, incomplete_only: bool = True
+    ) -> int:
+        root = cls.WORKSPACE_ROOT
+        if not root.exists():
+            return 0
+
+        cutoff = time.time() - max_age_hours * 3600
+        removed = 0
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            marker = entry / cls.INCOMPLETE_MARKER
+            if incomplete_only and not marker.exists():
+                continue
+            try:
+                mtime = (
+                    marker.stat().st_mtime if marker.exists() else entry.stat().st_mtime
+                )
+            except OSError:
+                continue
+            if mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        return removed
+
     def get_file_path(self, relative_path: str) -> Path:
         return self._validate_path(relative_path)
-    
+
     def write_file(self, relative_path: str, content: str) -> Path:
         full_path = self._validate_path(relative_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content, encoding="utf-8")
         return full_path
-    
+
     def read_file(self, relative_path: str) -> str | None:
         full_path = self._validate_path(relative_path)
         if full_path.exists():
             return full_path.read_text(encoding="utf-8")
         return None
-    
+
     def file_exists(self, relative_path: str) -> bool:
         return self._validate_path(relative_path).exists()
-    
+
     def list_files(self, pattern: str = "**/*") -> list[Path]:
         return list(self.project_root.glob(pattern))
-    
+
     def delete_project(self) -> None:
         if self.project_root.exists():
             shutil.rmtree(self.project_root)
-    
+
     def get_project_info(self) -> dict:
         files = self.list_files()
         return {
             "project_id": self.project_id,
             "root": str(self.project_root),
             "file_count": len([f for f in files if f.is_file()]),
-            "files": [str(f.relative_to(self.project_root)) for f in files if f.is_file()]
+            "files": [
+                str(f.relative_to(self.project_root)) for f in files if f.is_file()
+            ],
         }
 
 
 class FileWriter:
     def __init__(self, workspace: WorkspaceManager):
         self.workspace = workspace
-    
+
     def save_code(self, file_path: str, code: str) -> dict:
         saved_path = self.workspace.write_file(file_path, code)
         return {
             "status": "saved",
             "path": str(saved_path),
-            "size_bytes": len(code.encode("utf-8"))
+            "size_bytes": len(code.encode("utf-8")),
         }
-    
+
     def save_multiple(self, files: list[dict]) -> list[dict]:
         results = []
         for file_info in files:
@@ -92,13 +174,13 @@ class FileWriter:
             result = self.save_code(path, content)
             results.append(result)
         return results
-    
+
     def append_to_file(self, file_path: str, content: str) -> dict:
         existing = self.workspace.read_file(file_path) or ""
         new_content = existing + "\n" + content
         return self.save_code(file_path, new_content)
-    
+
     def create_directory(self, dir_path: str) -> dict:
-        full_path = self.workspace.project_root / dir_path
+        full_path = self.workspace.get_file_path(dir_path)
         full_path.mkdir(parents=True, exist_ok=True)
         return {"status": "created", "path": str(full_path)}

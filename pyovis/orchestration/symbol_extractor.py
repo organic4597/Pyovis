@@ -318,7 +318,10 @@ Respond in JSON format:
 """
 
         try:
-            response = await self.brain.call(prompt)
+            brain = self.brain
+            if brain is None:
+                return
+            response = await brain.call(prompt)
             # Parse response and update descriptions
             # (Implementation depends on Brain API)
         except Exception:
@@ -366,6 +369,177 @@ Respond in JSON format:
                 "constants": len(summary.constants),
             },
         }
+
+    def extract_graph(self, code: str, file_path: str = "unknown.py") -> Dict[str, Any]:
+        summary = self.extract_from_ast(code, file_path)
+        module_id = f"module:{file_path}"
+        symbols: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+
+        for cls in summary.classes:
+            symbol_id = self._make_symbol_id(file_path, cls.name)
+            symbols.append(
+                {
+                    "id": symbol_id,
+                    "name": cls.name,
+                    "qualified_name": f"{file_path}:{cls.name}",
+                    "kind": "class",
+                    "file_path": file_path,
+                    "line": 0,
+                    "parent": None,
+                    "signature": "",
+                    "return_type": "",
+                    "description": cls.description,
+                    "is_async": False,
+                    "external": False,
+                }
+            )
+            edges.append(
+                {
+                    "source": module_id,
+                    "target": symbol_id,
+                    "relation": "defines",
+                    "line": 0,
+                }
+            )
+            for method_name in cls.methods:
+                method_id = self._make_symbol_id(
+                    file_path, method_name, parent=cls.name
+                )
+                symbols.append(
+                    {
+                        "id": method_id,
+                        "name": method_name,
+                        "qualified_name": f"{file_path}:{cls.name}.{method_name}",
+                        "kind": "method",
+                        "file_path": file_path,
+                        "line": 0,
+                        "parent": cls.name,
+                        "signature": "",
+                        "return_type": "",
+                        "description": "",
+                        "is_async": False,
+                        "external": False,
+                    }
+                )
+                edges.append(
+                    {
+                        "source": symbol_id,
+                        "target": method_id,
+                        "relation": "defines",
+                        "line": 0,
+                    }
+                )
+            for field_name in cls.fields:
+                field_id = self._make_symbol_id(file_path, field_name, parent=cls.name)
+                symbols.append(
+                    {
+                        "id": field_id,
+                        "name": field_name,
+                        "qualified_name": f"{file_path}:{cls.name}.{field_name}",
+                        "kind": "field",
+                        "file_path": file_path,
+                        "line": 0,
+                        "parent": cls.name,
+                        "signature": "",
+                        "return_type": "",
+                        "description": "",
+                        "is_async": False,
+                        "external": False,
+                    }
+                )
+                edges.append(
+                    {
+                        "source": symbol_id,
+                        "target": field_id,
+                        "relation": "defines",
+                        "line": 0,
+                    }
+                )
+
+        for func in summary.functions:
+            symbol_id = self._make_symbol_id(file_path, func.name)
+            symbols.append(
+                {
+                    "id": symbol_id,
+                    "name": func.name,
+                    "qualified_name": f"{file_path}:{func.name}",
+                    "kind": "function",
+                    "file_path": file_path,
+                    "line": 0,
+                    "parent": None,
+                    "signature": func.signature,
+                    "return_type": func.return_type,
+                    "description": func.description,
+                    "is_async": func.is_async,
+                    "external": False,
+                }
+            )
+            edges.append(
+                {
+                    "source": module_id,
+                    "target": symbol_id,
+                    "relation": "defines",
+                    "line": 0,
+                }
+            )
+
+        for const in summary.constants:
+            symbol_id = self._make_symbol_id(file_path, const.name)
+            symbols.append(
+                {
+                    "id": symbol_id,
+                    "name": const.name,
+                    "qualified_name": f"{file_path}:{const.name}",
+                    "kind": "constant",
+                    "file_path": file_path,
+                    "line": 0,
+                    "parent": None,
+                    "signature": "",
+                    "return_type": const.type_hint,
+                    "description": const.description,
+                    "is_async": False,
+                    "external": False,
+                }
+            )
+            edges.append(
+                {
+                    "source": module_id,
+                    "target": symbol_id,
+                    "relation": "defines",
+                    "line": 0,
+                }
+            )
+
+        return {
+            "module": {
+                "id": module_id,
+                "file_path": file_path,
+                "language": "python",
+            },
+            "symbols": self._dedupe_symbols(symbols),
+            "edges": self._dedupe_edges(edges),
+        }
+
+    @staticmethod
+    def _make_symbol_id(file_path: str, name: str, parent: str | None = None) -> str:
+        if parent:
+            return f"symbol:{file_path}:{parent}.{name}"
+        return f"symbol:{file_path}:{name}"
+
+    @staticmethod
+    def _dedupe_symbols(symbols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        unique: Dict[str, Dict[str, Any]] = {}
+        for symbol in symbols:
+            unique[symbol["id"]] = symbol
+        return list(unique.values())
+
+    @staticmethod
+    def _dedupe_edges(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        unique: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+        for edge in edges:
+            unique[(edge["source"], edge["target"], edge["relation"])] = edge
+        return list(unique.values())
 
 
 def extract_symbols_quick(code: str, file_path: str = "unknown.py") -> str:

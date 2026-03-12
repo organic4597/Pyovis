@@ -61,7 +61,9 @@ class LoopContext:
     workspace: Optional["WorkspaceManager"] = None
     progress_callback: Optional[Callable[[str], Awaitable[None]]] = None
     reasoning_log: list[str] = field(default_factory=list)
-    setup_commands: list[str] = field(default_factory=list)  # Hands가 반환한 pip install 명령
+    setup_commands: list[str] = field(
+        default_factory=list
+    )  # Hands가 반환한 pip install 명령
 
     # 토큰 폭탄 방지: 리스트 크기 제한
     MAX_FAIL_REASONS: int = field(default=10, repr=False)
@@ -70,9 +72,10 @@ class LoopContext:
     def trim_logs(self) -> None:
         """누적 리스트를 최대 크기로 잘라냄 (토큰 폭탄 방지)."""
         if len(self.fail_reasons) > self.MAX_FAIL_REASONS:
-            self.fail_reasons = self.fail_reasons[-self.MAX_FAIL_REASONS:]
+            self.fail_reasons = self.fail_reasons[-self.MAX_FAIL_REASONS :]
         if len(self.reasoning_log) > self.MAX_REASONING_LOG:
-            self.reasoning_log = self.reasoning_log[-self.MAX_REASONING_LOG:]
+            self.reasoning_log = self.reasoning_log[-self.MAX_REASONING_LOG :]
+
 
 class ResearchLoopController:
     def __init__(
@@ -152,7 +155,9 @@ class ResearchLoopController:
 
                 # 스킬 컨텍스트 로드 (한 번만)
                 skill_context = self.skill_manager.load_verified(ctx.task_description)
-                logger.info(f"[DEBUG] skill_context 로드 완료: {len(skill_context)} bytes")
+                logger.info(
+                    f"[DEBUG] skill_context 로드 완료: {len(skill_context)} bytes"
+                )
 
                 full_code_files: dict[str, str] = {}  # {file_path: code}
                 all_success = True
@@ -190,7 +195,11 @@ class ResearchLoopController:
 
                         # 코드 조각 축적 — file_path 기준으로 저장
                         if part_code:
-                            fp = task.get("file_path", "output.py") if isinstance(task, dict) else "output.py"
+                            fp = (
+                                task.get("file_path", "output.py")
+                                if isinstance(task, dict)
+                                else "output.py"
+                            )
                             full_code_files[fp] = part_code
                             logger.info(f"✅ {idx}/{total} 단계 코드 생성 완료 ({fp})")
                         else:
@@ -207,7 +216,9 @@ class ResearchLoopController:
                 # [중요] 모든 루프가 끝난 후 — 파일 목록을 ctx에 저장
                 if full_code_files:
                     ctx.current_code = full_code_files  # dict {file_path: code}
-                    logger.info(f"✅ 전체 코드 생성 완료 ({len(full_code_files)} 파일): {list(full_code_files.keys())}")
+                    logger.info(
+                        f"✅ 전체 코드 생성 완료 ({len(full_code_files)} 파일): {list(full_code_files.keys())}"
+                    )
                     # BUILD 직후 즉시 저장 — PASS/ESCALATE 도달 전에도 코드가 디스크에 존재하도록
                     await self._save_current_code(ctx)
                 else:
@@ -226,7 +237,12 @@ class ResearchLoopController:
                 if ctx.current_code is None:
                     raise RuntimeError("No code to execute in critique step")
                 try:
-                    result = await self.critic.execute(ctx.current_code, allow_network=True, setup_commands=ctx.setup_commands or None)
+                    result = await self.critic.execute(
+                        ctx.current_code,
+                        allow_network=True,
+                        setup_commands=ctx.setup_commands or None,
+                        workspace=ctx.workspace,
+                    )
                 except Exception as e:
                     logger.error(f"critic.execute() 예외 발생: {e}")
                     # Docker 데몬 다운 등 인프라 장애 → 실행 실패로 처리 (abort 방지)
@@ -295,11 +311,11 @@ class ResearchLoopController:
                 # Store Judge thought process in Knowledge Graph
                 thought_process = getattr(verdict, "thought_process", None)
                 if self.kg_builder and thought_process:
-                    await self._store_judge_reasoning(
+                    asyncio.create_task(self._store_judge_reasoning(
                         ctx=ctx,
                         task=ctx.todo_list[ctx.current_task_index],
                         verdict=verdict,
-                    )
+                    ))
 
                 if verdict.verdict == JudgeVerdict.PASS.value:
                     await self._save_current_code(ctx)
@@ -326,7 +342,9 @@ class ResearchLoopController:
             # 5. REVISE / ENRICH 단계: 수정 및 보강
             # ============================================================
             elif ctx.current_step in (LoopStep.REVISE, LoopStep.ENRICH):
-                await self._notify(ctx, f"\U0001f527 수정 중... (루프 {ctx.loop_count})")
+                await self._notify(
+                    ctx, f"\U0001f527 수정 중... (루프 {ctx.loop_count})"
+                )
                 current_task = ctx.todo_list[ctx.current_task_index]
                 if self._can_self_fix(ctx):
                     skill_context = self.skill_manager.load_verified(
@@ -338,7 +356,9 @@ class ResearchLoopController:
                     # dict 모드: 현재 task의 파일만 추출해 revise에 넘김
                     current_file_path = current_task.get("file_path", "output.py")
                     if isinstance(prev_code, dict):
-                        prev_code_str = prev_code.get(current_file_path, next(iter(prev_code.values()), ""))
+                        prev_code_str = prev_code.get(
+                            current_file_path, next(iter(prev_code.values()), "")
+                        )
                     else:
                         prev_code_str = prev_code
 
@@ -352,7 +372,9 @@ class ResearchLoopController:
                         skill_context,
                     )
                     # dict 모드: 수정된 파일을 dict에 다시 병합
-                    if isinstance(prev_code, dict) and isinstance(ctx.current_code, str):
+                    if isinstance(prev_code, dict) and isinstance(
+                        ctx.current_code, str
+                    ):
                         merged = dict(prev_code)
                         merged[current_file_path] = ctx.current_code
                         ctx.current_code = merged
@@ -360,9 +382,7 @@ class ResearchLoopController:
                     # Log S/R metrics if available
                     sr_metrics = getattr(self.hands, "_last_sr_metrics", None)
                     if sr_metrics:
-                        ctx.reasoning_log.append(
-                            f"[SR_METRICS] {sr_metrics}"
-                        )
+                        ctx.reasoning_log.append(f"[SR_METRICS] {sr_metrics}")
                         logger.info(f"S/R metrics: {sr_metrics}")
 
                     # Syntax validation: compile check (str인 경우에만)
@@ -370,9 +390,7 @@ class ResearchLoopController:
                         try:
                             compile(ctx.current_code, "<revise>", "exec")
                         except SyntaxError as e:
-                            logger.warning(
-                                f"S/R 결과 구문 오류: {e}, 이전 코드로 롤백"
-                            )
+                            logger.warning(f"S/R 결과 구문 오류: {e}, 이전 코드로 롤백")
                             ctx.current_code = prev_code
                             ctx.reasoning_log.append(
                                 f"[REVISE_ROLLBACK] Syntax error after S/R: {e}"
@@ -392,42 +410,57 @@ class ResearchLoopController:
             elif ctx.current_step == LoopStep.ESCALATE:
                 await self._notify(ctx, "⚠️ 에스켈레이션 처리 중...")
                 ctx.escalation_count += 1
-                logger.info(f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}, escalation_count={ctx.escalation_count}")
+                logger.info(
+                    f"[DEBUG] ESCALATE: loop_count={ctx.loop_count}, max={ctx.max_loops}, consecutive_fails={ctx.consecutive_fails}, escalation_count={ctx.escalation_count}"
+                )
 
                 # 무한 ESCALATE 루프 방지: 최대 에스켈레이션 횟수 초과 시 사람에게 넘김
                 if ctx.escalation_count > ctx.max_escalations:
-                    logger.warning(f"무한 ESCALATE 방지: escalation_count({ctx.escalation_count}) > max({ctx.max_escalations})")
+                    logger.warning(
+                        f"무한 ESCALATE 방지: escalation_count({ctx.escalation_count}) > max({ctx.max_escalations})"
+                    )
                     await self._save_current_code(ctx)
                     return self._human_escalation(ctx)
 
                 if ctx.loop_count >= ctx.max_loops:
-                    await self._save_current_code(ctx)  # 에스켈레이션시에도 현재까지 생성된 코드 보존
+                    await self._save_current_code(
+                        ctx
+                    )  # 에스켈레이션시에도 현재까지 생성된 코드 보존
                     return self._human_escalation(ctx)
 
                 escalation_result, reasoning = await self.brain.handle_escalation(ctx)
                 if reasoning:
                     ctx.reasoning_log.append(f"[ESCALATE] {reasoning}")
                 logger.info(f"[DEBUG] Brain escalation_result: {escalation_result}")
-                logger.info(f"[DEBUG] escalation_result.get('action') = {escalation_result.get('action')}")
+                logger.info(
+                    f"[DEBUG] escalation_result.get('action') = {escalation_result.get('action')}"
+                )
                 if escalation_result.get("action") == "revise_plan":
                     ctx.plan = escalation_result["new_plan"]
                     raw_todo = escalation_result.get("new_todo") or []
                     if not raw_todo:
-                        logger.warning("ESCALATE: Brain이 빈 todo_list 반환, 사람 에스켈레이션 실행")
+                        logger.warning(
+                            "ESCALATE: Brain이 빈 todo_list 반환, 사람 에스켈레이션 실행"
+                        )
                         await self._save_current_code(ctx)
                         return self._human_escalation(ctx)
                     ctx.todo_list = [
-                        t if isinstance(t, dict)
+                        t
+                        if isinstance(t, dict)
                         else {"id": i + 1, "title": str(t), "description": str(t)}
                         for i, t in enumerate(raw_todo)
                     ]
-                    ctx.pass_criteria = escalation_result.get("new_criteria") or ctx.pass_criteria
+                    ctx.pass_criteria = (
+                        escalation_result.get("new_criteria") or ctx.pass_criteria
+                    )
                     ctx.consecutive_fails = 0
                     ctx.current_task_index = 0  # Reset index for new todo_list
                     ctx.setup_commands = []  # 이전 pip 명령 초기화 (headless 재감지 방지)
                     ctx.current_step = LoopStep.BUILD
                 else:
-                    logger.info(f"[DEBUG] Brain 반환: action != 'revise_plan', 사람 에스케일레이션 실행")
+                    logger.info(
+                        f"[DEBUG] Brain 반환: action != 'revise_plan', 사람 에스케일레이션 실행"
+                    )
                     await self._save_current_code(ctx)  # Brain도 몰르는 경우 코드 보존
                     return self._human_escalation(ctx)
 
@@ -446,12 +479,14 @@ class ResearchLoopController:
             try:
                 readme_result = self.file_writer.save_code("README.md", readme_content)
                 readme_saved_path = readme_result.get("path", "")
-                ctx.created_files.append({
-                    "task_id": -1,
-                    "file_path": "README.md",
-                    "saved_path": readme_saved_path,
-                    "size_bytes": readme_result.get("size_bytes", 0),
-                })
+                ctx.created_files.append(
+                    {
+                        "task_id": -1,
+                        "file_path": "README.md",
+                        "saved_path": readme_saved_path,
+                        "size_bytes": readme_result.get("size_bytes", 0),
+                    }
+                )
                 logger.info(f"📝 README.md 저장 완료: {readme_saved_path}")
             except Exception as e:
                 logger.warning(f"⚠️ README.md 저장 실패: {e}")
@@ -465,7 +500,7 @@ class ResearchLoopController:
         final_result["project_id"] = ctx.project_id
         final_result["created_files"] = ctx.created_files
         final_result["reasoning_log"] = ctx.reasoning_log
-        if self.workspace:
+        if self.workspace and ctx.workspace is not None:
             final_result["workspace_root"] = str(ctx.workspace.project_root)
 
         return final_result
@@ -478,6 +513,7 @@ class ResearchLoopController:
             # 다중 파일 모드: 각 파일을 개별 저장
             for fp, src in ctx.current_code.items():
                 result = self.file_writer.save_code(fp, src)
+                asyncio.create_task(self._ingest_code_symbols(fp, src, ctx))
                 ctx.created_files.append(
                     {
                         "task_id": ctx.current_task_index,
@@ -488,8 +524,11 @@ class ResearchLoopController:
                 )
         else:
             current_task = ctx.todo_list[ctx.current_task_index]
-            file_path = current_task.get("file_path", f"output_{ctx.current_task_index}.py")
+            file_path = current_task.get(
+                "file_path", f"output_{ctx.current_task_index}.py"
+            )
             result = self.file_writer.save_code(file_path, ctx.current_code)
+            asyncio.create_task(self._ingest_code_symbols(file_path, ctx.current_code, ctx))
             ctx.created_files.append(
                 {
                     "task_id": ctx.current_task_index,
@@ -498,6 +537,21 @@ class ResearchLoopController:
                     "size_bytes": result.get("size_bytes", 0),
                 }
             )
+
+    async def _ingest_code_symbols(
+        self, file_path: str, source_code: str, ctx: LoopContext
+    ) -> None:
+        if self.kg_builder is None:
+            return
+        if not file_path.endswith(".py"):
+            return
+        try:
+            source = f"task:{ctx.task_id}:file:{file_path}"
+            await self.kg_builder.add_code_symbols(
+                source_code, file_path=file_path, source=source
+            )
+        except Exception as exc:
+            logger.warning("Failed to ingest code symbols for %s: %s", file_path, exc)
 
     def _check_escalation(self, ctx: LoopContext) -> LoopStep:
         if ctx.consecutive_fails >= ctx.max_consecutive_fails:
@@ -530,6 +584,9 @@ class ResearchLoopController:
     ) -> None:
         """Store Judge reasoning in Knowledge Graph for future reference."""
         try:
+            kg_builder = self.kg_builder
+            if kg_builder is None:
+                return
             task_id = ctx.task_id
             task_desc = task.get("description", "") or task.get("title", "")
 
@@ -538,21 +595,21 @@ class ResearchLoopController:
                 return
 
             # Add the reasoning as a triplet
-            await self.kg_builder.add_triplet(
+            await kg_builder.add_triplet(
                 subject=f"task_{task_id}",
                 predicate="judged_with_reasoning",
                 object=thought_process[:2000],
             )
 
             # Add the verdict as a triplet
-            await self.kg_builder.add_triplet(
+            await kg_builder.add_triplet(
                 subject=f"task_{task_id}",
                 predicate="verdict",
                 object=verdict.verdict,
             )
 
             # Add task description
-            await self.kg_builder.add_triplet(
+            await kg_builder.add_triplet(
                 subject=f"task_{task_id}",
                 predicate="has_description",
                 object=task_desc[:500],

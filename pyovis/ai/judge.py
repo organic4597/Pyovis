@@ -6,9 +6,11 @@ from dataclasses import dataclass
 import httpx
 
 from pyovis.ai.prompts.loaders import load_prompt
+from pyovis.ai.response_utils import parse_json_message, strip_cot
 from pyovis.ai.swap_manager import ModelSwapManager
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class JudgeResult:
@@ -19,9 +21,10 @@ class JudgeResult:
 
 
 # 환경 제약으로 인한 에러 유형 — LLM 평가 없이 즉시 ESCALATE
-_ENV_ERROR_TYPES: frozenset[str] = frozenset({
-    "timeout_error", "network_error", "install_error", "env_error"
-})
+_ENV_ERROR_TYPES: frozenset[str] = frozenset(
+    {"timeout_error", "network_error", "install_error", "env_error"}
+)
+
 
 class Judge:
     def __init__(self, swap_manager: ModelSwapManager) -> None:
@@ -65,15 +68,15 @@ class Judge:
                 )
 
         user_message = f"""
-Task: {task['title']}
+Task: {task["title"]}
 PASS 기준:
-{chr(10).join(f'- {c}' for c in criteria)}
+{chr(10).join(f"- {c}" for c in criteria)}
 
 실행 결과:
-- 종료 코드: {critic_result.get('exit_code', -1)}
-- 실행 시간: {critic_result.get('execution_time', 0):.2f}초
-- 표준 출력: {critic_result.get('stdout', '없음')[:500]}
-- 에러: {critic_result.get('stderr', '없음')[:500]}
+- 종료 코드: {critic_result.get("exit_code", -1)}
+- 실행 시간: {critic_result.get("execution_time", 0):.2f}초
+- 표준 출력: {critic_result.get("stdout", "없음")[:500]}
+- 에러: {critic_result.get("stderr", "없음")[:500]}
 - 현재 루프 횟수: {loop_count}
 
 PASS 기준을 모두 충족하면 PASS.
@@ -91,14 +94,21 @@ PASS 기준을 모두 충족하면 PASS.
             try:
                 response = await self._call_fresh(user_message)
                 result = self._parse(response)
-                if result.verdict != "ESCALATE" or result.reason != "Judge 응답 파싱 실패":
+                if (
+                    result.verdict != "ESCALATE"
+                    or result.reason != "Judge 응답 파싱 실패"
+                ):
                     return result
                 # 파싱 실패로 ESCALATE 반환된 경우 재시도
                 last_error = "parse_failure"
-                logger.warning(f"Judge 파싱 실패, 재시도 {attempt + 1}/{1 + max_retries}")
+                logger.warning(
+                    f"Judge 파싱 실패, 재시도 {attempt + 1}/{1 + max_retries}"
+                )
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"Judge API 호출 실패: {e}, 재시도 {attempt + 1}/{1 + max_retries}")
+                logger.warning(
+                    f"Judge API 호출 실패: {e}, 재시도 {attempt + 1}/{1 + max_retries}"
+                )
         # 모든 재시도 실패
         logger.error(f"Judge {1 + max_retries}회 재시도 모두 실패: {last_error}")
         return JudgeResult(
@@ -129,10 +139,8 @@ PASS 기준을 모두 충족하면 PASS.
         try:
             payload = response or ""
             payload = re.sub(r"```json|```", "", payload).strip()
-            match = re.search(r"\{.*\}", payload, re.DOTALL)
-            if not match:
-                raise ValueError("No JSON object found")
-            data = json.loads(match.group(0))
+            payload = strip_cot(payload)
+            data = parse_json_message({"content": payload})
             return JudgeResult(
                 verdict=data["verdict"],
                 score=int(data["score"]),
