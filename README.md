@@ -1,210 +1,244 @@
 # Pyovis
 
-[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/Rust-PyO3-black?logo=rust)](https://www.rust-lang.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-Dual_GPU-76B900?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 [![llama.cpp](https://img.shields.io/badge/Inference-llama.cpp-orange)](https://github.com/ggml-org/llama.cpp)
 
-Local multi-role AI agent for research and code execution.
+Pyovis is a local multi-role AI agent focused on iterative coding, critique, tool use, and memory.
 
-Pyovis orchestrates specialized LLM roles on a single local inference stack, adds a critique and evaluation loop, persists knowledge into graph memory, and integrates external tools through MCP.
+The repository combines a Python orchestration layer, a Rust extension module, a single llama.cpp inference server with model hot-swap, Docker-based execution, graph memory, MCP integration, and multiple interfaces including Telegram, a graph viewer, and a QnA web app.
 
-## What It Does
+## Current Repository State
 
-- Runs specialized roles for planning, coding, reviewing, and judging.
-- Swaps models dynamically on one local inference server.
-- Executes code in an isolated sandbox and feeds failures back into the loop.
-- Stores conversational and document knowledge into graph memory for retrieval.
-- Maps tasks to MCP tools and proposes fallbacks when tools are unavailable.
+This codebase contains a mix of runtime naming from the v4 line and design artifacts labeled v5.x. The documents in this repository now describe the implemented code that is currently checked in rather than the older planning snapshots.
 
-## Core Roles
+## Highlights
 
-| Role | Model | Responsibility | Context |
-|------|-------|----------------|---------|
-| Planner | GLM-4.7-Flash 30B | Task decomposition and routing | 64K |
-| Brain | Qwen3-14B | Review, escalation, synthesis | 40K |
-| Hands | Devstral-24B | Code generation and edits | 80K |
-| Judge | DeepSeek-R1-Distill-14B | PASS / REVISE / ESCALATE decisions | 64K |
+- Multi-role LLM workflow with Planner, Brain, Hands, and Judge roles.
+- Single local inference endpoint with model swap instead of permanently loaded parallel models.
+- Critique loop that executes generated code, classifies failures, and requests revisions.
+- Persistent knowledge graph memory with optional Neo4j mirroring.
+- MCP tool discovery and tool-calling adapter layer.
+- Telegram bot interface, knowledge graph web viewer, and standalone QnA web app.
+- Rust core module for queueing, model-swap support, and worker primitives.
 
-## Request Flow
+## Runtime Overview
 
 ```text
-User Request
-    -> Request Analysis
-    -> Planner
-    -> Hands
-    -> Critic Sandbox
-    -> Judge
-       -> PASS
-       -> REVISE
-       -> ESCALATE
-    -> Knowledge Graph Ingestion
+Telegram / QnA Web / CLI
+     |
+     v
+   SessionManager
+      |- RequestAnalyzer
+      |- Planner / Brain / Hands / Judge
+      |- ResearchLoopController
+      |- MCPManager + MCPToolAdapter
+      |- KnowledgeGraphBuilder
+      |- ConversationMemory
+     |
+     v
+     CriticRunner
+     |
+     v
+  WorkspaceManager + FileWriter
+     |
+     v
+      /pyovis_memory
+
+Model inference is served by llama.cpp on port 8001.
 ```
 
-## Why This Project Exists
+## Roles And Responsibilities
 
-Most local-agent setups stop at prompt routing or a single chat loop. Pyovis is structured as an execution system:
+| Role | Default model | Responsibility |
+|------|---------------|----------------|
+| Planner | GLM-4.7-Flash 30B | Decompose tasks, define todo lists, pass criteria, and file structure |
+| Brain | Qwen3-14B | Review, synthesis, escalation, direct-answer behavior |
+| Hands | Devstral-Small-2-24B | Build and revise code, generate execution steps |
+| Judge | DeepSeek-R1-Distill-Qwen-14B | Score outcomes and return PASS, REVISE, ENRICH, or ESCALATE |
 
-- orchestration for multi-step work
-- evaluation for self-correction
-- memory for retrieval and accumulation
-- tool access for external actions
-- native acceleration for queueing and model-swap support
+## Technology Stack
 
-The goal is not just answering questions, but handling iterative work with local infrastructure.
+| Area | Technology | Purpose |
+|------|------------|---------|
+| Core runtime | Python | Orchestration, interfaces, execution, memory, tools |
+| Native module | Rust + PyO3 + maturin | Queue, swap-related primitives, thread-pool support |
+| Inference | llama.cpp | Local OpenAI-compatible chat endpoint on port 8001 |
+| Web APIs | FastAPI, Starlette, Uvicorn | QnA app, KG viewer, memory service |
+| HTTP | httpx | LLM requests, tool fetching, streaming client calls |
+| Memory | JSON graph, NetworkX, optional Neo4j mirror | Graph persistence, community detection, graph queries |
+| Retrieval | FAISS, sentence-transformers | Vector search support in memory services |
+| Execution | Docker, virtualenv | Sandboxed code execution and dependency setup |
+| Config | PyYAML, dotenv | Runtime configuration and environment loading |
+| Interface | python-telegram-bot | Telegram bot runtime |
+| Data utilities | numpy, pandas | Analysis and data handling helpers |
+| Testing | pytest, pytest-asyncio | Unit and integration test suites |
 
-## Key Capabilities
+## Main Components
 
-### 1. Multi-role orchestration
+| Package | Purpose |
+|---------|---------|
+| `pyovis/orchestration` | Session routing, loop control, request analysis, limits, symbol extraction |
+| `pyovis/ai` | Role-specific LLM wrappers, prompts, and model swap manager |
+| `pyovis/execution` | Critic runner, execution plans, workspace snapshots, file persistence |
+| `pyovis/memory` | Knowledge graph builder, experience DB, conversation memory, Neo4j mirror |
+| `pyovis/mcp` | MCP client, registry explorer, tool adapter, tool registry |
+| `pyovis/interface` | Telegram bot and knowledge graph web viewer |
+| `pyovis/monitoring` | Health, log, and watchdog helpers |
+| `pyovis_core` | Rust extension module exposed to Python |
+| `qna_bot` | Standalone project QnA web application |
 
-The system separates planning, generation, critique, and judging so each stage can use a different model and responsibility boundary.
-
-### 2. Local model hot-swap
-
-Pyovis uses a single llama.cpp server and swaps roles on demand instead of keeping every model loaded at once.
-
-### 3. Critique and revision loop
-
-Generated output is executed in a sandbox, reviewed, and revised up to a bounded number of iterations.
-
-### 4. Knowledge graph memory
-
-Conversation and extracted facts are ingested into graph memory to support Graph RAG enrichment on later requests.
-
-### 5. MCP integration
-
-Tasks can be mapped to real tools, with fallback suggestions when the preferred tool is unavailable.
-
-### 6. Rust-accelerated core
-
-Performance-sensitive pieces such as queueing, swap helpers, and worker infrastructure live in the Rust extension module.
-
-## Architecture
+## Repository Structure
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                         User Input                          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    SessionManager                           │
-│   RequestAnalyzer -> Graph RAG -> LoopController            │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-           ┌───────────────┼────────────────┐
-           ▼               ▼                ▼
-      ┌─────────┐   ┌─────────────┐  ┌──────────────┐
-      │ Planner │   │    Brain    │  │    Hands     │
-      └────┬────┘   └──────┬──────┘  └──────┬───────┘
-           │               │                │
-           └───────────────┼────────────────┘
-                           │
-                           ▼
-                   ┌───────────────┐
-                   │     Judge     │
-                   └───────┬───────┘
-                           │
-               ┌───────────┼───────────┐
-               ▼           ▼           ▼
-            PASS         REVISE    ESCALATE
-               │
-               ▼
-        Knowledge Graph Memory
+pyovis/
+  ai/             LLM role wrappers and prompts
+  execution/      sandbox execution, file writes, snapshots, static analysis
+  interface/      Telegram bot and knowledge graph viewer
+  mcp/            MCP connection and tool adapter layer
+  memory/         graph memory, experience DB, conversation memory, Neo4j mirror
+  monitoring/     runtime monitoring utilities
+  orchestration/  SessionManager, loop controller, request analyzer
+  skill/          skill loading and validation
+  tracking/       loop tracking
+pyovis_core/      Rust workspace member with PyO3 bindings
+qna_bot/          FastAPI-based project QnA application
+config/           unified runtime configuration
+docker/           sandbox image assets
+scripts/          model startup, validation, stress and e2e helpers
+tests/            pytest suites for AI, orchestration, execution, memory, integration
 ```
 
-More detail is in `ARCHITECTURE.md`.
+## Interfaces And Entry Points
 
-## Hardware Profile
+| Entry point | What it starts |
+|-------------|----------------|
+| `pyovis` | Unified launcher: Telegram bot, KG web viewer, SessionManager, llama.cpp model launcher |
+| `python run_unified.py` | Legacy unified launcher |
+| `python run_qna.py` | Standalone QnA web app on port 8080 |
+| `python -m pyovis.main` | Core session loop plus KG server startup |
+| `./scripts/start_model.sh <role>` | Direct llama.cpp role startup and swapping |
 
-Validated on a dual-GPU local machine.
+## Ports And Runtime Services
 
-| Item | Spec |
-|------|------|
-| GPU 0 | RTX 3060 12GB |
-| GPU 1 | RTX 4070 SUPER 12GB |
-| Total VRAM | 24GB |
-| RAM | 32GB |
-| Storage | ~60GB for local models |
-| CUDA | 12.x |
-| Python | 3.12+ |
-| Rust | 1.70+ |
+| Service | Default port | Notes |
+|---------|--------------|-------|
+| llama.cpp server | 8001 | OpenAI-compatible local inference endpoint |
+| KG web viewer | 8502 | Starlette viewer for the persisted graph |
+| QnA web app | 8080 | FastAPI app for project-aware QnA |
+| Neo4j browser | 7474 | Optional, when Neo4j mirror is enabled |
+| Neo4j bolt | 7687 | Optional, when Neo4j mirror is enabled |
 
 ## Quick Start
 
-### 1. Clone the project
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/organic4597/Pyovis.git
 cd Pyovis
 ```
 
-### 2. Prepare the external inference dependency
+### 2. Install Python and Rust dependencies
 
-This repository intentionally excludes third-party llama.cpp source snapshots and local GGUF model files.
+```bash
+pip install -e .
+pip install python-telegram-bot python-dotenv
+```
+
+For development:
+
+```bash
+pip install -e .[dev]
+```
+
+### 3. Prepare external runtime dependencies
+
+The repository intentionally excludes llama.cpp and local model files.
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp /Pyvis/llama.cpp
 ```
 
-### 3. Start a model role
+You also need GGUF model files under `/pyovis_memory/models` that match the paths in `config/unified_node.yaml` and `scripts/start_model.sh`.
+
+### 4. Set environment variables
+
+Minimum runtime setup:
+
+```bash
+export TELEGRAM_BOT_TOKEN=your_token_here
+```
+
+Optional Neo4j mirror:
+
+```bash
+export PYOVIS_NEO4J_URI=bolt://localhost:7687
+export PYOVIS_NEO4J_USERNAME=neo4j
+export PYOVIS_NEO4J_PASSWORD=your_password
+```
+
+### 5. Start the system
+
+Unified launcher:
+
+```bash
+pyovis
+```
+
+Standalone QnA app:
+
+```bash
+./scripts/start_model.sh brain
+python run_qna.py --port 8080
+```
+
+Direct model control:
 
 ```bash
 ./scripts/start_model.sh brain
 ./scripts/start_model.sh hands
+./scripts/start_model.sh judge
+./scripts/start_model.sh status
 ./scripts/start_model.sh stop
 ```
 
-### 4. Validate the environment
+## Persistence Layout
+
+Pyovis uses `/pyovis_memory` as its runtime storage root.
+
+| Path | Purpose |
+|------|---------|
+| `/pyovis_memory/models` | GGUF model files |
+| `/pyovis_memory/workspace` | Generated and executed workspaces |
+| `/pyovis_memory/kg` | Knowledge graph persistence and visualization output |
+| `/pyovis_memory/logs` | Model server and swap logs |
+| `/pyovis_memory/loop_records` | Loop tracking output |
+
+## Testing
+
+The repository includes pytest suites for:
+
+- AI modules
+- orchestration and task classification
+- file writing and search/replace
+- graph builder and Neo4j integration
+- end-to-end loop behavior
+- phase integration pipelines
+
+Run tests with:
 
 ```bash
-./scripts/validate_hardware.sh all
-./scripts/profile_swap.sh 3
-python3 scripts/stress_test.py --cycles 3
-```
-
-### 5. Run tests
-
-```bash
-pytest tests/ -v
+pytest tests -v
 cargo test --workspace
 ```
 
-## Repository Layout
+## Recommended Documentation
 
-```text
-pyovis/            Python orchestration, AI roles, execution, memory, MCP
-pyovis_core/       Rust extension module with PyO3 bindings
-config/            Runtime configuration
-docker/            Sandbox container assets
-tests/             Python and integration tests
-scripts/           Server startup, validation, profiling helpers
-ARCHITECTURE.md    Detailed architecture reference
-```
-
-## Current Status
-
-- Core orchestration pipeline implemented
-- Local model swap workflow implemented
-- Sandbox critique loop implemented
-- Graph memory integration implemented
-- MCP tool mapping integrated
-- Rust core integrated through PyO3
-
-## Documentation
-
-- `ARCHITECTURE.md` for system structure and component details
-- `pyovis_v5_3.md` for the current spec snapshot
-- `pyovis_v5_3_ko.md` for the Korean spec snapshot
+- `ARCHITECTURE.md` for the current implemented architecture
+- `config/unified_node.yaml` for runtime model and hardware settings
+- `pyovis_v5_3.md` and `pyovis_v5_3_ko.md` for higher-level spec snapshots
 
 ## Notes For GitHub Distribution
 
-The repository excludes the following on purpose:
-
-- local model binaries
-- llama.cpp vendor snapshot
-- local secrets and chat identifiers
-- archived planning and investigation files
-- build artifacts and cache directories
-
-That keeps the public repository focused on the core codebase and reproducible project structure.
+The public repository intentionally excludes large local binaries, secrets, archived planning artifacts, and vendor snapshots. That keeps the repository focused on the code, configuration, and reproducible runtime layout.

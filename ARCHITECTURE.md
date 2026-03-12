@@ -1,261 +1,393 @@
-# Pyovis v4.0 — Architecture
+# Pyovis Architecture
 
-## Overview
+## Scope
 
-Pyovis is a local AI assistant and research agent running 4 specialized LLM roles on dual GPUs with model hot-swapping, a self-evaluation loop, persistent knowledge graph memory, and MCP tool integration.
+This document describes the architecture implemented in the current repository state.
 
+The codebase still contains mixed naming from the v4 runtime line and v5.x planning documents. The sections below focus on what is actually wired into the checked-in Python, Rust, runtime scripts, and configuration files.
+
+## System Summary
+
+Pyovis is a local agent platform with four cooperating LLM roles, a bounded execution and revision loop, graph-based memory, MCP tool integration, and multiple user interfaces.
+
+At a high level, the system is built from:
+
+- a Python orchestration layer under `pyovis/`
+- a Rust extension module under `pyovis_core/`
+- a local llama.cpp server used as the shared inference endpoint
+- workspace and sandbox execution infrastructure
+- memory services for graph and experience accumulation
+- interface layers for Telegram, graph visualization, and project QnA
+
+## High-Level Runtime Topology
+
+```text
+       +----------------------+
+       |  Telegram Interface  |
+       +----------------------+
+           |
+           |
+       +----------------------+
+       |  SessionManager      |
+       |  - RequestAnalyzer   |
+       |  - MCP integration   |
+       |  - Graph enrichment  |
+       +----------+-----------+
+            |
+      +-----------------+------------------+
+      |                                    |
+      v                                    v
+  +---------------------+              +----------------------+
+  | ResearchLoopControl |              | Direct answer path   |
+  | PLAN -> BUILD ->    |              | Brain-only responses |
+  | CRITIQUE -> EVAL    |              +----------------------+
+  +----------+----------+
+       |
+       v
+      +-----------------------------------+
+      | Planner / Hands / Judge / Brain   |
+      | via ModelSwapManager              |
+      +----------------+------------------+
+           |
+           v
+         +---------------+
+         | llama.cpp API |
+         | port 8001     |
+         +---------------+
+
+       Loop execution path
+           |
+           v
+         +---------------+
+         | CriticRunner  |
+         | Docker / venv |
+         +-------+-------+
+           |
+           v
+      +--------------------------+
+      | WorkspaceManager         |
+      | FileWriter / Snapshots   |
+      +--------------------------+
+           |
+           v
+      +--------------------------+
+      | KnowledgeGraphBuilder    |
+      | Experience DB            |
+      | Conversation Memory      |
+      +--------------------------+
+           |
+           v
+      +--------------------------+
+      | Optional Neo4j mirror    |
+      +--------------------------+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         User Input                          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    SessionManager                           │
-│   RequestAnalyzer → Graph RAG Enrichment → LoopController  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-           ┌───────────────┼────────────────┐
-           ▼               ▼                ▼
-      ┌─────────┐   ┌─────────────┐  ┌──────────────┐
-      │ Planner │   │    Brain    │  │    Hands     │
-      │ GLM-4.7 │   │  Qwen3-14B  │  │ Devstral-24B │
-      └────┬────┘   └──────┬──────┘  └──────┬───────┘
-           │               │                │
-           └───────────────┼────────────────┘
-                           │
-                           ▼
-                   ┌───────────────┐
-                   │     Judge     │
-                   │ DeepSeek-R1   │
-                   └───────┬───────┘
-                           │
-               ┌───────────┼───────────┐
-               ▼           ▼           ▼
-            PASS         REVISE    ESCALATE
-               │           │
-               │           └─── Loop (max 5)
-               ▼
-      ┌────────────────┐
-      │  ingest_to_    │
-      │  graph (KG)    │
-      └────────────────┘
-```
 
----
+## Runtime Entry Points
 
-## Hardware Configuration
+### Preferred entry point
 
-| Item | Spec |
+`pyovis` launches the unified runtime through `pyovis/cli.py`.
+
+That path is the most complete launcher in the repository and starts:
+
+- environment loading
+- `SessionManager`
+- the Telegram bot
+- the KG web viewer on port 8502
+- the llama.cpp-backed role server through `scripts/start_model.sh`
+
+### Additional entry points
+
+- `run_unified.py`: legacy unified launcher
+- `run_qna.py`: FastAPI-based project QnA app on port 8080
+- `python -m pyovis.main`: core session loop plus KG service startup
+- `run_telegram_bot.py`: Telegram-only helper script
+
+## Main Technologies
+
+| Layer | Technologies | Notes |
+|------|--------------|-------|
+| Orchestration | Python, asyncio | Core control flow, long-running session loop |
+| Native acceleration | Rust, PyO3, maturin | `pyovis_core` exposes native classes to Python |
+| Inference | llama.cpp | Single OpenAI-compatible endpoint, role-specific model swapping |
+| Web runtime | FastAPI, Starlette, Uvicorn | QnA app, KG web UI, KG service |
+| HTTP client | httpx | Model API calls, streaming, native fetch tool |
+| Execution | Docker, virtualenv | Sandboxed execution and dependency installation |
+| Graph memory | JSON persistence, NetworkX | Graph storage, traversal, community analysis, visualization |
+| Optional graph mirror | Neo4j | Optional persistence and visualization mirror backend |
+| Retrieval | FAISS, sentence-transformers | Vector retrieval support in memory services |
+| Bot interface | python-telegram-bot | Telegram polling and interaction flow |
+| Config and parsing | PyYAML, python-dotenv | YAML runtime config and environment loading |
+| Data utilities | numpy, pandas | Data and retrieval-related helpers |
+| Testing | pytest, pytest-asyncio | Unit and integration coverage |
+
+## Core Architectural Decisions
+
+### 1. One inference server, multiple roles
+
+Pyovis does not keep all role models resident at the same time. Instead, `ModelSwapManager` ensures the correct role model is loaded into a single llama.cpp endpoint and blocks work during swap windows when required.
+
+This reduces steady-state memory pressure while preserving role separation.
+
+### 2. Bounded self-correction loop
+
+The core execution path is a bounded research loop implemented in `pyovis/orchestration/loop_controller.py`.
+
+Main phases:
+
+- `PLAN`
+- `BUILD`
+- `CRITIQUE`
+- `EVALUATE`
+- `REVISE`
+- `ENRICH`
+- `ESCALATE`
+- `COMPLETE`
+
+The loop uses explicit limits such as `max_loops`, `max_consecutive_fails`, and escalation counters to prevent runaway behavior.
+
+### 3. Workspace-first execution
+
+Generated code is written into isolated workspaces under `/pyovis_memory/workspace` through `WorkspaceManager` and `FileWriter`.
+
+This keeps generated artifacts separate from the main repository and supports:
+
+- path traversal protection
+- temporary virtual environments
+- incomplete/complete markers
+- stale workspace cleanup
+- execution snapshots and revision flows
+
+### 4. Memory as first-class infrastructure
+
+The memory layer combines several patterns:
+
+- `KnowledgeGraphBuilder` for graph extraction and graph persistence
+- `ConversationMemory` for per-chat history
+- `ExperienceDB` for reusable success and failure patterns
+- optional `Neo4jGraphMirror` for external graph mirroring
+
+Graph persistence is file-backed by default and can be mirrored into Neo4j when the environment is configured.
+
+### 5. Tool calling through MCP and native fallbacks
+
+The MCP layer connects external tools and also supports locally registered native tools. `MCPToolAdapter` converts tool schemas into the OpenAI function-calling format expected by the model endpoint and loops tool results back into the LLM call path.
+
+## Package-Level Structure
+
+### `pyovis/orchestration`
+
+Responsible for request routing and loop coordination.
+
+Important modules:
+
+- `session_manager.py`: central coordinator
+- `loop_controller.py`: bounded agent loop
+- `request_analyzer.py`: complexity and tool requirement analysis
+- `chat_chain.py`: chat-chain style decomposition helpers
+- `hard_limit.py`: output and control limits
+- `symbol_extractor.py`: code symbol extraction for graph enrichment
+- `parallel_generator.py`: multi-step generation helpers
+
+### `pyovis/ai`
+
+Role-specific model wrappers and inference control.
+
+Important modules:
+
+- `swap_manager.py`: role/model swap and health checks
+- `planner.py`: task decomposition
+- `brain.py`: review and synthesis
+- `hands.py`: build and revise path
+- `judge.py`, `judge_enhanced.py`: evaluation and escalation decisions
+- `response_utils.py`: response cleanup and parsing helpers
+- `prompts/`: role prompts and prompt loaders
+
+### `pyovis/execution`
+
+Execution, persistence, and revision support.
+
+Important modules:
+
+- `critic_runner.py`: execution and error classification
+- `execution_plan.py`: install/run strategy planning
+- `file_writer.py`: workspace lifecycle and file persistence
+- `search_replace.py`: structured edits for revision loops
+- `snapshot.py`: workspace snapshotting
+- `static_analyzer.py`: code analysis support
+
+### `pyovis/memory`
+
+Graph, retrieval, and historical memory.
+
+Important modules:
+
+- `graph_builder.py`: graph extraction, persistence, visualization, communities
+- `kg_server.py`: vector-search service with lazy FastAPI import
+- `conversation.py`: per-conversation memory
+- `experience_db.py`: experience storage and retrieval
+- `user_profile.py`: inferred user preference memory
+- `neo4j_backend.py`: optional mirror backend
+
+### `pyovis/mcp`
+
+Tool discovery and tool calling.
+
+Important modules:
+
+- `mcp_client.py`: MCP connections and tool invocation
+- `tool_adapter.py`: tool schema conversion and tool loop execution
+- `mcp_registry.py`: registry exploration and discovery
+- `tool_registry.py`, `tool_installer.py`: local registration helpers
+
+### `pyovis/interface`
+
+User-facing runtime surfaces.
+
+Important modules:
+
+- `telegram_bot.py`: Telegram runtime and message workflow
+- `telegram_enhanced.py`: enhanced Telegram behaviors
+- `kg_web.py`: Starlette-based graph viewer and APIs
+
+### `pyovis/monitoring`
+
+Runtime health and process observation.
+
+Modules:
+
+- `health_monitor.py`
+- `log_monitor.py`
+- `watchdog.py`
+
+### `pyovis_core`
+
+Rust workspace member exposing native types to Python.
+
+Structure:
+
+- `src/lib.rs`
+- `src/model/`
+- `src/queue/`
+- `src/thread_pool/`
+
+The Rust workspace is configured at the repository root through `Cargo.toml`, while maturin builds the Python extension from `pyovis_core/Cargo.toml`.
+
+### `qna_bot`
+
+Standalone FastAPI application for repository-aware QnA.
+
+Responsibilities:
+
+- load project context at startup
+- stream Brain model responses through SSE
+- expose health and context endpoints
+- serve a small browser UI
+
+## Key Control Flow
+
+### Request handling
+
+1. A request arrives through Telegram or another runtime path.
+2. `SessionManager` loads or updates conversation context.
+3. `RequestAnalyzer` classifies complexity and tool needs.
+4. Graph context may be injected from the memory layer.
+5. The request is either answered directly or passed into `ResearchLoopController`.
+6. Planner, Hands, Brain, and Judge interact through the swap manager.
+7. Critic results and judge decisions determine pass, revise, enrich, or escalate.
+8. Results and extracted knowledge are written back into memory stores.
+
+### Execution handling
+
+1. Planner returns a todo list, pass criteria, self-fix scope, and optional file structure.
+2. `WorkspaceManager` prepares project directories and isolated runtime state.
+3. Hands generates code and optional setup commands.
+4. `CriticRunner` executes generated output with a dedicated virtual environment and optional network access.
+5. Error patterns are classified into install, environment, syntax, import, and runtime families.
+6. Judge returns structured verdicts that drive the next loop step.
+
+### Memory handling
+
+1. Graph extraction uses the LLM endpoint to derive triplets, concepts, and query entities.
+2. Results are stored in a JSON-backed graph file.
+3. Visual HTML output is written to `/pyovis_memory/kg/graph.html`.
+4. Optional Neo4j mirroring stores semantic entities, modules, symbols, and relations externally.
+
+## Runtime Configuration
+
+Main configuration file: `config/unified_node.yaml`
+
+Key areas:
+
+- system metadata
+- CPU and GPU layout
+- model paths and context sizes
+- swap timing and blocking policy
+- loop limits and thresholds
+- sandbox behavior
+- storage directories
+- logging settings
+
+Current notable settings in that file include:
+
+- single llama.cpp endpoint on port 8001
+- dual-GPU tensor split `0.55,0.45`
+- `max_loops: 5`
+- Docker sandbox execution
+- `/pyovis_memory` as the storage root
+
+## External Services And Ports
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| llama.cpp | 8001 | shared OpenAI-compatible inference endpoint |
+| KG web viewer | 8502 | graph visualization and graph API |
+| QnA app | 8080 | browser-accessible project QnA |
+| Neo4j HTTP | 7474 | optional graph browser |
+| Neo4j Bolt | 7687 | optional graph driver endpoint |
+
+## Storage Layout
+
+| Path | Role |
 |------|------|
-| GPU 0 | RTX 3060 12GB (45% VRAM split) |
-| GPU 1 | RTX 4070 SUPER 12GB (55% VRAM split) |
-| RAM | 32GB |
-| Storage | ~60GB model files |
-| CUDA driver | 13.1 |
-| CUDA nvcc | 12.0 |
-| OS | Linux (WSL2 6.6) |
+| `/pyovis_memory/models` | GGUF model storage |
+| `/pyovis_memory/workspace` | generated projects and execution workspaces |
+| `/pyovis_memory/kg` | graph JSON and HTML visualization output |
+| `/pyovis_memory/logs` | model server and runtime logs |
+| `/pyovis_memory/loop_records` | loop tracking artifacts |
 
-### Model-to-GPU Mapping
+## Build And Packaging
 
-| Role | Model | VRAM | Load Time | GPU |
-|------|-------|------|-----------|-----|
-| Planner | GLM-4.7-Flash 30B | 22.4 GB | 72s | Both |
-| Brain | Qwen3-14B | 18.5 GB | 27s | Both |
-| Hands | Devstral-24B | 22.2 GB | 27s | Both |
-| Judge | DeepSeek-R1-Distill-14B | 14.3 GB | 19s | Both |
+### Python packaging
 
-Single llama-server on port 8001, roles swap via `/slots` API.
+- build backend: `maturin`
+- project metadata: `pyproject.toml`
+- Python requirement: `>=3.10`
 
----
+### Rust packaging
 
-## Software Layers
+- root workspace: `Cargo.toml`
+- Python extension crate: `pyovis_core/Cargo.toml`
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Python (pyovis/)                                       │
-│  ┌──────────────┐ ┌───────────────┐ ┌────────────────┐  │
-│  │ orchestration│ │     ai/       │ │    memory/     │  │
-│  │ SessionMgr   │ │ ModelSwapMgr  │ │ KnowledgeGraph │  │
-│  │ LoopCtrl     │ │ Brain/Planner │ │ KGStore(FAISS) │  │
-│  │ ReqAnalyzer  │ │ Hands/Judge   │ │                │  │
-│  └──────────────┘ └───────────────┘ └────────────────┘  │
-│  ┌──────────────┐ ┌───────────────┐ ┌────────────────┐  │
-│  │    mcp/      │ │   skill/      │ │  execution/    │  │
-│  │ MCPClient    │ │ SkillManager  │ │ CriticRunner   │  │
-│  │ ToolAdapter  │ │               │ │ FileWriter     │  │
-│  │ MCPRegistry  │ │               │ │                │  │
-│  └──────────────┘ └───────────────┘ └────────────────┘  │
-│  ┌──────────────┐                                        │
-│  │  tracking/   │                                        │
-│  │ LoopTracker  │                                        │
-│  └──────────────┘                                        │
-├─────────────────────────────────────────────────────────┤
-│  Rust (pyovis_core/) — PyO3 bindings                    │
-│  PyPriorityQueue  |  PyModelSwap  |  ThreadPool         │
-├─────────────────────────────────────────────────────────┤
-│  llama.cpp server (port 8001, CUDA build)               │
-└─────────────────────────────────────────────────────────┘
-```
+## Testing Layout
 
----
+The repository includes dedicated pytest modules for:
 
-## Component Reference
+- AI module behavior
+- request analysis and task classification
+- loop controller and end-to-end pipeline behavior
+- file writing and search/replace operations
+- graph builder and Neo4j integration
+- phase-level integration scenarios
 
-### `pyovis/orchestration/`
+The top-level test directory currently contains 15 focused test modules covering both unit and integration paths.
 
-#### `SessionManager` (`session_manager.py`, ~470 lines)
+## Operational Notes
 
-Main request dispatcher. Integrates MCP tools, Graph RAG context enrichment, and knowledge ingestion.
-
-```python
-SessionManager(task_queue, model_swap, tracker, result_callback)
-
-# Key methods
-await session.run()                          # Main async loop
-await session._handle_request(payload)       # Route to loop or direct answer
-await session._enrich_with_graph_rag(payload)# Inject KG context into prompt
-await session._ingest_to_graph(req, resp)    # Auto-accumulate conversation to KG
-await session.get_mcp_tools() -> list[str]   # Discover live MCP tools
-session.suggest_alternative_tools(failed)    # Fallback tool mapping
-session.get_tools_for_task(keywords) -> dict # Keyword-based tool selection
-```
-
-#### `ResearchLoopController` (`loop_controller.py`, ~250 lines)
-
-Drives the PLAN → BUILD → CRITIQUE → EVALUATE → REVISE/ENRICH/ESCALATE → COMPLETE cycle.
-
-```python
-ResearchLoopController(model_swap, critic, skill_mgr, tracker, file_writer)
-
-await controller.run(ctx: LoopContext) -> dict
-# LoopContext fields: request, session_id, loop_count, history, ...
-# LoopStep: PLAN, BUILD, CRITIQUE, EVALUATE, REVISE, ENRICH, ESCALATE, COMPLETE
-# JudgeVerdict: PASS, REVISE, ESCALATE
-```
-
-Loop limits:
-- `max_loops`: 5 (configurable in `unified_node.yaml`)
-- `max_consecutive_failures`: 3
-
-#### `RequestAnalyzer` (`request_analyzer.py`)
-
-Context-aware intent detection. Classifies requests into `TaskComplexity` levels and maps to real MCP tool names.
-
-```python
-RequestAnalyzer(model_swap)
-
-await analyzer.analyze(request, context) -> AnalysisResult
-# AnalysisResult fields: complexity, needs_clarification, required_tools, ...
-# TaskComplexity: SIMPLE, MODERATE, COMPLEX
-# ToolStatus: AVAILABLE, UNAVAILABLE, FALLBACK
-```
-
----
-
-### `pyovis/ai/`
-
-#### `ModelSwapManager` (`swap_manager.py`, ~348 lines)
-
-Hot-swaps LLM roles on the single llama-server without restarting the process.
-
-```python
-ModelSwapManager(config: SwapManagerConfig)
-
-await mgr.ensure_model(role: ModelRole)   # Load role if not current
-await mgr.health_check() -> bool
-await mgr.shutdown()
-await mgr._run_llm(role, messages, ...) -> dict
-```
-
-`ModelRole` enum: `PLANNER`, `BRAIN`, `HANDS`, `JUDGE`
-
-#### `Brain` / `Planner` / `response_utils`
-
-- `Brain`: Reviews plan output, decides escalation
-- `Planner`: Decomposes task into steps
-- `strip_cot(text)`: Remove `<think>` blocks from CoT models
-- `message_text(msg)`: Extract text from message object
-- `parse_json_message(msg)`: Parse JSON from LLM response
-
----
-
-### `pyovis/memory/`
-
-#### `KnowledgeGraphBuilder` (`graph_builder.py`, ~751 lines)
-
-LLM-driven triplet extraction with NetworkX graph + FAISS vector store. Persistent JSON + index files.
-
-```python
-KnowledgeGraphBuilder(persist_path, llm_base, model)
-
-# Ingestion
-await kb.add_text(text, source) -> dict
-await kb.add_document(text, source, max_chars=1500, overlap=200) -> dict
-
-# Extraction (LLM-driven)
-await kb.extract_triplets(text) -> list[dict]   # [{"subject","predicate","object"}]
-await kb.extract_concepts(text) -> list[dict]   # [{"concept","type","description"}]
-
-# Retrieval
-await kb.query_graph_rag(query, depth=2, use_llm_extraction=True) -> dict
-await kb.hybrid_search(query, vector_results=5, depth=2) -> dict
-kb.query_neighbors(entity, depth=2) -> dict
-
-# Community detection
-kb.detect_communities() -> dict[str, list[str]]
-await kb.summarize_communities() -> dict[str, str]
-
-# Utilities
-kb.to_networkx() -> nx.DiGraph
-kb.visualize(output_path) -> str
-kb.get_stats() -> dict
-
-# Module-level helper
-chunk_text(text, max_chars=1500, overlap=200) -> list[dict]
-```
-
-#### `KGStore` (`kg_server.py`)
-
-FAISS-backed vector store with FastAPI server. Uses lazy imports — `fastapi`/`pydantic`/`numpy` loaded only when server starts.
-
-```python
-KGStore(index_path, documents_path, model_name)
-
-store.add_documents(texts, sources)
-store.search(query, k=5) -> list[dict]
-store.save()
-store.load()
-```
-
-Server endpoints (when `kg_server.py` run standalone):
-- `POST /add` — ingest documents
-- `POST /search` — vector similarity search
-- `GET /stats` — index statistics
-
----
-
-### `pyovis/mcp/`
-
-#### `MCPClient` / `MCPManager` (`mcp_client.py`)
-
-Manages MCP (Model Context Protocol) server connections and tool invocation.
-
-```python
-MCPManager(configs: list[MCPServerConfig])
-
-await mgr.connect_all()
-await mgr.call_tool(name, arguments) -> ToolCallResult
-mgr.list_tools() -> list[MCPTool]
-```
-
-#### `MCPToolAdapter` / `ToolEnabledLLM` (`tool_adapter.py`)
-
-Wraps LLM calls with tool-use loop. Handles tool_calls in response, executes via MCPManager, re-submits results.
-
-#### `MCPRegistryExplorer` (`mcp_registry.py`)
-
-Discovers available MCP servers from npm registry and local installation.
+- llama.cpp and GGUF model files are external runtime dependencies and are intentionally not part of the public repository.
+- The most complete launcher path is `pyovis` rather than the legacy helper scripts.
+- Neo4j is optional. The default graph persistence path does not require it.
+- The repository also contains historical planning documents, but the architecture above reflects the runtime code currently checked in.
 
 ---
 
