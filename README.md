@@ -25,6 +25,34 @@ This codebase contains a mix of runtime naming from the v4 line and design artif
 
 ## Runtime Overview
 
+```mermaid
+flowchart TD
+  UI[Telegram / QnA Web / CLI] --> SM[SessionManager]
+  SM --> RA[RequestAnalyzer]
+  SM --> RLC[ResearchLoopController]
+  SM --> MEM[KnowledgeGraphBuilder\nConversationMemory]
+  SM --> MCP[MCPManager\nMCPToolAdapter]
+
+  RLC --> PLAN[Planner]
+  RLC --> HANDS[Hands]
+  RLC --> JUDGE[Judge]
+  RLC --> BRAIN[Brain]
+
+  PLAN --> SWAP[ModelSwapManager]
+  HANDS --> SWAP
+  JUDGE --> SWAP
+  BRAIN --> SWAP
+
+  SWAP --> LLAMA[llama.cpp API :8001]
+  HANDS --> CRITIC[CriticRunner]
+  CRITIC --> WS[WorkspaceManager\nFileWriter]
+  WS --> STORE[/pyovis_memory/]
+  MEM --> STORE
+  CRITIC --> DOCKER[Docker / venv]
+  MEM -. optional .-> NEO[Neo4j Mirror]
+  CORE[Rust Core\npyovis_core] --> SM
+```
+
 ```text
 Telegram / QnA Web / CLI
      |
@@ -48,6 +76,48 @@ Telegram / QnA Web / CLI
 
 Model inference is served by llama.cpp on port 8001.
 ```
+
+## System Architecture
+
+```text
++-------------------------------------------------------------------+
+| Interface Layer                                                   |
+| Telegram Bot | QnA Web App | KG Web Viewer | CLI / Legacy Launchers|
++-------------------------------+-----------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------+
+| Orchestration Layer                                               |
+| SessionManager | RequestAnalyzer | ResearchLoopController         |
++-------------------------------+-----------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------+
+| AI Role Layer                                                     |
+| Planner | Brain | Hands | Judge | ModelSwapManager               |
++-------------------------------+-----------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------+
+| Tool / Execution Layer                                            |
+| MCPManager | MCPToolAdapter | CriticRunner | WorkspaceManager     |
++-------------------------------+-----------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------+
+| Memory Layer                                                      |
+| KnowledgeGraphBuilder | ExperienceDB | ConversationMemory         |
+| Optional Neo4jGraphMirror                                         |
++-------------------------------+-----------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------+
+| Infrastructure Layer                                              |
+| llama.cpp | Docker | virtualenv | /pyovis_memory | Rust core      |
++-------------------------------------------------------------------+
+```
+
+아키텍처 관점에서 보면 Pyovis는 단순 챗봇이 아니라, 인터페이스 계층 위에 오케스트레이션과 역할 분리된 LLM 계층이 있고, 그 아래에 실행 계층과 메모리 계층이 붙는 구조입니다. 실제 추론은 llama.cpp 단일 엔드포인트를 공유하고, 역할 전환은 `ModelSwapManager`가 담당합니다.
 
 ## Roles And Responsibilities
 

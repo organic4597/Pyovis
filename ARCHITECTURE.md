@@ -82,6 +82,77 @@ At a high level, the system is built from:
       +--------------------------+
 ```
 
+## Layered Architecture
+
+Pyovis는 계층형 구조로 이해하는 편이 더 정확합니다.
+
+```text
++-------------------------------------------------------------------+
+| 1. Interface Layer                                                |
+|    - Telegram bot                                                 |
+|    - QnA web app                                                  |
+|    - Knowledge graph web UI                                       |
+|    - CLI / launcher scripts                                       |
++-------------------------------------------------------------------+
+| 2. Orchestration Layer                                            |
+|    - SessionManager                                               |
+|    - RequestAnalyzer                                              |
+|    - ResearchLoopController                                       |
+|    - hard_limit / chat_chain / symbol extraction helpers          |
++-------------------------------------------------------------------+
+| 3. AI Role Layer                                                  |
+|    - Planner                                                      |
+|    - Brain                                                        |
+|    - Hands                                                        |
+|    - Judge                                                        |
+|    - ModelSwapManager                                             |
++-------------------------------------------------------------------+
+| 4. Tool And Execution Layer                                       |
+|    - MCPManager / MCPToolAdapter                                  |
+|    - CriticRunner                                                 |
+|    - ExecutionPlan / SearchReplace / Snapshot                     |
+|    - WorkspaceManager / FileWriter                                |
++-------------------------------------------------------------------+
+| 5. Memory Layer                                                   |
+|    - KnowledgeGraphBuilder                                        |
+|    - ExperienceDB                                                 |
+|    - ConversationMemory                                           |
+|    - User profile memory                                          |
+|    - Optional Neo4j mirror                                        |
++-------------------------------------------------------------------+
+| 6. Infrastructure Layer                                           |
+|    - llama.cpp                                                    |
+|    - Docker sandbox                                               |
+|    - virtualenv                                                   |
+|    - /pyovis_memory persistence                                   |
+|    - Rust extension module                                        |
++-------------------------------------------------------------------+
+```
+
+이 구조에서 중요한 점은 오케스트레이션 계층이 모든 요청의 중심이며, AI 역할 계층은 직접 외부 상태를 관리하기보다 오케스트레이션이 준비한 컨텍스트와 실행 결과를 소비하는 쪽에 가깝다는 것입니다.
+
+## Architecture Principles
+
+### Central coordinator
+
+`SessionManager`가 요청 진입점 역할을 하며 도구, 메모리, 루프, 인터페이스를 연결합니다.
+
+### Role isolation
+
+Planner, Brain, Hands, Judge는 역할이 분리되어 있고, 동일한 추론 엔드포인트를 공유하지만 논리적으로는 서로 다른 책임을 갖습니다.
+
+### Execution after generation
+
+생성 결과는 바로 완료로 처리되지 않고 `CriticRunner`를 통해 실행 또는 검증됩니다. 즉, 생성보다 실행 검증이 우선되는 구조입니다.
+
+### Persistent memory by default
+
+대화와 지식은 일회성 컨텍스트가 아니라 파일 기반 그래프 메모리와 경험 DB에 누적됩니다.
+
+### Optional external graph backend
+
+Neo4j는 필수 의존성이 아니라 선택적 미러 백엔드입니다. 기본 동작은 로컬 JSON 그래프 persistence 입니다.
+
 ## Runtime Entry Points
 
 ### Preferred entry point
