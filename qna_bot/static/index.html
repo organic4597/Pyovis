@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pyovis QnA</title>
+
+<!-- marked.js: 마크다운 렌더링 -->
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+<!-- highlight.js: 코드 하이라이팅 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/yaml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/rust.min.js"></script>
+
+<style>
+  :root {
+    --bg:         #0d1117;
+    --surface:    #161b22;
+    --surface2:   #21262d;
+    --border:     #30363d;
+    --text:       #e6edf3;
+    --text-muted: #8b949e;
+    --accent:     #58a6ff;
+    --accent2:    #1f6feb;
+    --user-bg:    #1f6feb;
+    --bot-bg:     #161b22;
+    --error:      #f85149;
+    --success:    #3fb950;
+    --radius:     12px;
+    --font-mono:  'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 헤더 ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .header-title { font-size: 17px; font-weight: 600; }
+  .header-title span { color: var(--accent); }
+  .header-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
+  /* 상태 표시 */
+  #status-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-muted);
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: var(--surface2);
+    cursor: default;
+  }
+  #status-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted);
+    transition: background 0.3s;
+  }
+  #status-dot.online  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  #status-dot.offline { background: var(--error); }
+
+  /* ── 채팅 영역 ── */
+  #chat-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 0;
+    scroll-behavior: smooth;
+  }
+  #chat-container::-webkit-scrollbar { width: 5px; }
+  #chat-container::-webkit-scrollbar-track { background: transparent; }
+  #chat-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .message-row {
+    display: flex;
+    padding: 6px 24px;
+    gap: 12px;
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+    animation: fadeSlideIn 0.2s ease;
+  }
+  @keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .message-row.user  { flex-direction: row-reverse; }
+  .message-row.bot   { flex-direction: row; }
+
+  /* 아바타 */
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+    margin-top: 2px;
+  }
+  .avatar.user { background: var(--user-bg); color: #fff; }
+  .avatar.bot  {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+  }
+
+  /* 말풍선 */
+  .bubble {
+    max-width: 78%;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    line-height: 1.7;
+  }
+  .bubble.user {
+    background: var(--user-bg);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .bubble.bot {
+    background: var(--bot-bg);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+    color: var(--text);
+  }
+
+  /* 마크다운 렌더링 */
+  .bubble.bot p    { margin: 0 0 10px; }
+  .bubble.bot p:last-child { margin-bottom: 0; }
+  .bubble.bot h1, .bubble.bot h2, .bubble.bot h3 {
+    margin: 16px 0 8px; font-weight: 600; color: var(--text);
+    line-height: 1.3;
+  }
+  .bubble.bot h1 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .bubble.bot h2 { font-size: 16px; }
+  .bubble.bot h3 { font-size: 14px; color: var(--text-muted); }
+  .bubble.bot ul, .bubble.bot ol { padding-left: 20px; margin: 8px 0; }
+  .bubble.bot li { margin: 4px 0; }
+  .bubble.bot code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--surface2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: #e6b99d;
+  }
+  .bubble.bot pre {
+    background: #010409;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 12px 0;
+    overflow-x: auto;
+  }
+  .bubble.bot pre code {
+    background: transparent;
+    border: none;
+    padding: 14px 16px;
+    display: block;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .bubble.bot blockquote {
+    border-left: 3px solid var(--accent2);
+    padding: 8px 12px;
+    margin: 8px 0;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border-radius: 0 6px 6px 0;
+  }
+  .bubble.bot table {
+    width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px;
+  }
+  .bubble.bot th {
+    background: var(--surface2); color: var(--accent);
+    padding: 8px 12px; text-align: left;
+    border: 1px solid var(--border);
+  }
+  .bubble.bot td { padding: 7px 12px; border: 1px solid var(--border); }
+  .bubble.bot tr:nth-child(even) td { background: var(--surface2); }
+  .bubble.bot a { color: var(--accent); text-decoration: none; }
+  .bubble.bot a:hover { text-decoration: underline; }
+  .bubble.bot strong { color: #fff; font-weight: 600; }
+  .bubble.bot hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+  /* 커서 깜빡임 (스트리밍 중) */
+  .typing-cursor::after {
+    content: '▋';
+    animation: blink 0.7s step-end infinite;
+    color: var(--accent);
+    margin-left: 2px;
+  }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+  /* 로딩 dots */
+  .loading-dots {
+    display: flex; gap: 5px; align-items: center; padding: 4px 0;
+  }
+  .loading-dots span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted);
+    animation: dot-bounce 1.2s infinite ease-in-out;
+  }
+  .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40%           { transform: scale(1);   opacity: 1;   }
+  }
+
+  /* 에러 */
+  .bubble.error {
+    background: rgba(248, 81, 73, 0.1);
+    border-color: rgba(248, 81, 73, 0.3);
+    color: #ffa198;
+  }
+
+  /* 빈 화면 안내 */
+  #welcome {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; padding: 40px 24px; text-align: center; color: var(--text-muted);
+    gap: 12px;
+  }
+  #welcome .big-icon { font-size: 48px; }
+  #welcome h2 { font-size: 22px; color: var(--text); font-weight: 600; }
+  #welcome p  { font-size: 14px; max-width: 440px; line-height: 1.7; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+  .chip {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 14px; font-size: 13px; color: var(--text-muted);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .chip:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+
+  /* ── 입력 영역 ── */
+  #input-area {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 14px 24px 18px;
+    flex-shrink: 0;
+  }
+  #input-wrapper {
+    max-width: 900px; margin: 0 auto;
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  #question-input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    min-height: 44px;
+    max-height: 180px;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color 0.15s;
+    overflow-y: auto;
+  }
+  #question-input::placeholder { color: var(--text-muted); }
+  #question-input:focus { border-color: var(--accent2); }
+
+  #send-btn {
+    background: var(--accent2);
+    border: none; border-radius: 10px;
+    width: 44px; height: 44px;
+    color: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
+  }
+  #send-btn:hover:not(:disabled) { background: var(--accent); transform: scale(1.05); }
+  #send-btn:disabled { background: var(--surface2); color: var(--text-muted); cursor: not-allowed; transform: none; }
+
+  #input-hint {
+    text-align: center; font-size: 11px; color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  /* 반응형 */
+  @media (max-width: 600px) {
+    .message-row { padding: 6px 12px; }
+    .bubble { max-width: 88%; }
+    header { padding: 12px 16px; }
+    #input-area { padding: 12px 12px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 헤더 -->
+<header>
+  <div class="header-left">
+    <div class="logo">P</div>
+    <div>
+      <div class="header-title">Pyovis <span>QnA</span></div>
+      <div class="header-subtitle">Brain · Qwen3-14B</div>
+    </div>
+  </div>
+  <div id="status-badge">
+    <div id="status-dot"></div>
+    <span id="status-text">확인 중...</span>
+  </div>
+</header>
+
+<!-- 채팅 영역 -->
+<div id="chat-container">
+  <div id="welcome">
+    <div class="big-icon">🧠</div>
+    <h2>Pyovis 프로젝트 QnA</h2>
+    <p>Pyovis v4.0 프로젝트에 대한 질문을 입력하세요.<br>
+       아키텍처, 구현 방식, 설정 등 무엇이든 답변합니다.</p>
+    <div class="chips">
+      <div class="chip" onclick="setQuestion(this)">Brain 역할이 뭐야?</div>
+      <div class="chip" onclick="setQuestion(this)">모델 hot-swap은 어떻게 동작해?</div>
+      <div class="chip" onclick="setQuestion(this)">Judge는 어떤 기준으로 평가해?</div>
+      <div class="chip" onclick="setQuestion(this)">FAISS KG Store 구조 설명해줘</div>
+      <div class="chip" onclick="setQuestion(this)">Rust core는 무슨 역할이야?</div>
+      <div class="chip" onclick="setQuestion(this)">테스트는 어떻게 실행해?</div>
+    </div>
+  </div>
+</div>
+
+<!-- 입력 영역 -->
+<div id="input-area">
+  <div id="input-wrapper">
+    <textarea
+      id="question-input"
+      placeholder="Pyovis 프로젝트에 대해 질문하세요... (Enter 전송 / Shift+Enter 줄바꿈)"
+      rows="1"
+    ></textarea>
+    <button id="send-btn" onclick="sendMessage()" title="전송">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+    </button>
+  </div>
+  <div id="input-hint">Enter 전송 &nbsp;·&nbsp; Shift+Enter 줄바꿈 &nbsp;·&nbsp; 대화 기록은 세션 중 유지됩니다</div>
+</div>
+
+<script>
+// ── 설정 ──────────────────────────────────────────────────────────
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+  highlight: function(code, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  }
+});
+
+// ── 상태 ──────────────────────────────────────────────────────────
+const chatHistory = [];   // { role: 'user'|'assistant', content: string }
+let isStreaming = false;
+
+// ── DOM 요소 ──────────────────────────────────────────────────────
+const chatContainer = document.getElementById('chat-container');
+const welcome       = document.getElementById('welcome');
+const inputEl       = document.getElementById('question-input');
+const sendBtn       = document.getElementById('send-btn');
+const statusDot     = document.getElementById('status-dot');
+const statusText    = document.getElementById('status-text');
+
+// ── 입력 오토 리사이즈 ────────────────────────────────────────────
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
+});
+
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// ── 서버 상태 확인 ────────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    const ok = data.llm_server === 'connected';
+    statusDot.className  = ok ? 'online' : 'offline';
+    statusText.textContent = ok
+      ? `LLM 연결됨 · 컨텍스트 ${(data.context_chars/1000).toFixed(1)}k자`
+      : 'LLM 서버 오프라인';
+  } catch {
+    statusDot.className  = 'offline';
+    statusText.textContent = '서버 연결 실패';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 30_000);
+
+// ── 추천 질문 칩 ─────────────────────────────────────────────────
+function setQuestion(el) {
+  inputEl.value = el.textContent;
+  inputEl.dispatchEvent(new Event('input'));
+  inputEl.focus();
+}
+
+// ── 메시지 DOM 생성 ───────────────────────────────────────────────
+function createMessageRow(role) {
+  // 첫 메시지 → 웰컴 화면 숨기기
+  if (welcome) welcome.style.display = 'none';
+
+  const row = document.createElement('div');
+  row.className = `message-row ${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = `avatar ${role}`;
+  avatar.textContent = role === 'user' ? '나' : 'B';
+
+  const bubble = document.createElement('div');
+  bubble.className = `bubble ${role}`;
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  chatContainer.appendChild(row);
+
+  scrollToBottom();
+  return bubble;
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => {
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  });
+}
+
+// ── 사용자 메시지 추가 ────────────────────────────────────────────
+function appendUserMessage(text) {
+  const bubble = createMessageRow('user');
+  // user 메시지는 plain text (XSS 방지)
+  bubble.textContent = text;
+}
+
+// ── 봇 응답 스트리밍 ─────────────────────────────────────────────
+async function streamBotResponse(question) {
+  const bubble = createMessageRow('bot');
+
+  // 로딩 dots
+  const dots = document.createElement('div');
+  dots.className = 'loading-dots';
+  dots.innerHTML = '<span></span><span></span><span></span>';
+  bubble.appendChild(dots);
+
+  let rawText = '';
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, history: chatHistory }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = '';
+    let firstChunk = true;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop(); // 미완성 줄 보류
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') break;
+
+        let parsed;
+        try { parsed = JSON.parse(data); } catch { continue; }
+
+        if (parsed.error) throw new Error(parsed.error);
+
+        if (parsed.text) {
+          if (firstChunk) {
+            dots.remove();
+            firstChunk = false;
+          }
+          rawText += parsed.text;
+          renderBubble(bubble, rawText, true);
+          scrollToBottom();
+        }
+      }
+    }
+
+  } catch (err) {
+    dots.remove();
+    bubble.classList.add('error');
+    bubble.textContent = `⚠️ 오류: ${err.message}`;
+    return null;
+  }
+
+  // 완료: 커서 제거 후 최종 렌더
+  renderBubble(bubble, rawText, false);
+  scrollToBottom();
+  return rawText;
+}
+
+// ── 마크다운 렌더링 ───────────────────────────────────────────────
+function renderBubble(bubble, text, streaming) {
+  const html = marked.parse(text);
+  bubble.innerHTML = html + (streaming ? '<span class="typing-cursor"></span>' : '');
+
+  // 코드 블록 하이라이팅
+  bubble.querySelectorAll('pre code').forEach(block => {
+    hljs.highlightElement(block);
+  });
+}
+
+// ── 메인 전송 함수 ────────────────────────────────────────────────
+async function sendMessage() {
+  if (isStreaming) return;
+
+  const question = inputEl.value.trim();
+  if (!question) return;
+
+  // 입력창 초기화
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendBtn.disabled = true;
+  isStreaming = true;
+
+  // 유저 메시지 표시
+  appendUserMessage(question);
+  chatHistory.push({ role: 'user', content: question });
+
+  // 봇 응답
+  const botAnswer = await streamBotResponse(question);
+
+  if (botAnswer) {
+    chatHistory.push({ role: 'assistant', content: botAnswer });
+  }
+
+  sendBtn.disabled = false;
+  isStreaming = false;
+  inputEl.focus();
+}
+</script>
+</body>
+</html>
