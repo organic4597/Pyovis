@@ -89,7 +89,7 @@ Performance-sensitive pieces such as queueing, swap helpers, and worker infrastr
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    SessionManager                           │
-│   RequestAnalyzer -> Graph RAG -> LoopController           │
+│   RequestAnalyzer -> Graph RAG -> LoopController            │
 └──────────────────────────┬──────────────────────────────────┘
                            │
            ┌───────────────┼────────────────┐
